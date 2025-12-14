@@ -2,3 +2,5 @@
 docker-compose.yml
 venv
 alembic.ini
+
+__pycache__/
