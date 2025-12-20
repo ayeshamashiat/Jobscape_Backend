@@ -1,24 +1,21 @@
 from pydantic import BaseModel, EmailStr
 from enum import Enum
 from typing import Optional
-
-class Role(str, Enum):
-    JOB_SEEKER = "job_seeker"
-    EMPLOYER = "employer"
-    ADMIN = "admin"
+from app.models.user import UserRole
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: Optional[str]  # required if email/password, optional for OAuth
-    role: Role
+    password: Optional[str]
+    role: UserRole
 
 class UserResponse(BaseModel):
     id: str
     email: str
-    role: Role
+    role: UserRole
 
-    class Config:
-        orm_mode = True
+    model_config = {
+        "from_attributes": True
+    }
 
 class Token(BaseModel):
     access_token: str
