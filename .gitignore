@@ -2,3 +2,10 @@
 docker-compose.yml
 venv
 alembic.ini
+utils/__pycache__
+app/__pycache__
+app/models/__pycache__
+app/routes/__pycache__
+app/crud/__pycache__
+app/schema/__pycache__
+
