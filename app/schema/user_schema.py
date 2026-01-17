@@ -1,14 +1,17 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from enum import Enum
 from typing import Optional
 from uuid import UUID
 from app.models.user import UserRole
 
-# ----------------- User creation -----------------
+
+# ----------------- User creation (for registration) -----------------
 class UserCreate(BaseModel):
     email: EmailStr
-    password: Optional[str]  # Can be None for OAuth users
-    role: UserRole
+    password: str = Field(..., min_length=8)
+    full_name: str = Field(..., min_length=1, max_length=200)
+    # Role is NOT here - it's set automatically by the route!
+
 
 # ----------------- User response -----------------
 class UserResponse(BaseModel):
@@ -22,18 +25,22 @@ class UserResponse(BaseModel):
         "from_attributes": True
     }
 
+
 # ----------------- Authentication tokens -----------------
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
+
 # ----------------- Password reset -----------------
 class PasswordResetRequest(BaseModel):
     email: EmailStr
 
+
 class PasswordResetConfirm(BaseModel):
     token: str
-    new_password: str
+    new_password: str = Field(..., min_length=8)
+
 
 # ----------------- Email verification -----------------
 class EmailVerificationUpdate(BaseModel):

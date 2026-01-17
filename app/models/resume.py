@@ -1,8 +1,9 @@
 import uuid
 import enum
 from typing import Optional
+from datetime import datetime
 
-from sqlalchemy import String, ForeignKey, Enum as SQLEnum
+from sqlalchemy import String, ForeignKey, Enum as SQLEnum, DateTime, func, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +33,11 @@ class Resume(Base):
         String,
         nullable=False
     )
+    
+    cloudinary_public_id: Mapped[Optional[str]] = mapped_column(
+        String,
+        nullable=True
+    )
 
     parsed_data: Mapped[Optional[dict]] = mapped_column(
         JSONB,
@@ -42,4 +48,15 @@ class Resume(Base):
         SQLEnum(ResumeParseStatus, name="resume_parse_status_enum"),
         default=ResumeParseStatus.PENDING,
         nullable=False
+    )
+    
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False
+    )
+    
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now()
     )

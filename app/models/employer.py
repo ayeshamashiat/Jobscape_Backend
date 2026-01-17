@@ -1,6 +1,7 @@
 import uuid
 from typing import Optional
-
+from datetime import datetime
+from sqlalchemy import String, Boolean, ForeignKey, DateTime, func
 from sqlalchemy import String, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,7 +31,8 @@ class Employer(Base):
 
     company_email: Mapped[str] = mapped_column(
         String,
-        nullable=False
+        nullable=False,
+        unique=True
     )
 
     location: Mapped[Optional[str]] = mapped_column(
@@ -43,24 +45,34 @@ class Employer(Base):
         default=False,
         nullable=False
     )
+    
     website: Mapped[Optional[str]] = mapped_column(
         String,
         nullable=True
     )
+    
     industry: Mapped[Optional[str]] = mapped_column(
         String,
         nullable=True
     )
+    
     size: Mapped[Optional[str]] = mapped_column(
         String,
         nullable=True
     )
+    
     description: Mapped[Optional[str]] = mapped_column(
         String,
         nullable=True
     )
+    
     logo_url: Mapped[Optional[str]] = mapped_column(
         String,
         nullable=True
     )
-    
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(), 
+        onupdate=func.now()
+    )
