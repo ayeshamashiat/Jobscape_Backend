@@ -8,26 +8,67 @@ from app.schema.employer_schema import (
     EmployerProfileUpdate,
     EmployerProfileResponse
 )
+from app.schema.user_schema import UserCreate, UserResponse
+from app.crud import user_crud
 from app.crud import employer_crud
+from app.crud.auth_crud import create_email_verification_token  # ← ADD THIS
+from app.models.employer import Employer
 from app.utils.security import get_current_user
+from app.utils.email import send_verification_email
 from app.utils.file_validators import validate_image_file, validate_document_file
 from app.utils.email_validators import verify_work_email_ownership
 from app.utils.startup_verifier import verify_linkedin_company, verify_website_legitimacy, calculate_startup_trust_score
 from app.models.user import User, UserRole
 import cloudinary.uploader
 
+
 router = APIRouter(prefix="/employer", tags=["employer"])
 
 
-# ===== REGISTRATION COMPLETION =====
+# ===== SIMPLE REGISTRATION (Step 1) =====
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def register_employer(user: UserCreate, db: Session = Depends(get_db)):
+    """Step 1: Register a new employer account (basic info only)"""
+    
+    existing_user = user_crud.get_user_by_email(db, user.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Create user
+    new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)
+    
+    # Create minimal Employer profile (only required fields)
+    employer = Employer(
+        user_id=new_user.id,
+        company_name=user.full_name,
+        company_email=user.email
+        # Everything else is nullable now!
+    )
+    
+    db.add(employer)
+    db.commit()
+    db.refresh(employer)
+    
+    # Send verification email
+    token = create_email_verification_token(db, new_user)
+    send_verification_email(new_user.email, token)
+    
+    return new_user
 
+# ===== COMPLETE REGISTRATION (Step 2) =====
 @router.post("/register/complete", response_model=EmployerProfileResponse, status_code=status.HTTP_201_CREATED)
 def complete_employer_registration(
     profile_data: EmployerRegistrationCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Complete employer registration after email verification"""
+    """
+    Step 2: Complete employer registration after email verification
+    Adds company details and sets verification tier
+    """
     
     if current_user.role != UserRole.EMPLOYER:
         raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
@@ -36,6 +77,11 @@ def complete_employer_registration(
     existing = employer_crud.get_employer_by_user_id(db, current_user.id)
     if existing and existing.profile_completed:
         raise HTTPException(status_code=400, detail="Registration already completed")
+    
+    # Determine verification tier based on company type
+    initial_tier = "EMAIL_VERIFIED"
+    trust_score = 50
+    alt_verification = {}
     
     # REGISTERED COMPANIES: Require email domain match
     if profile_data.company_type == "REGISTERED":
@@ -49,14 +95,10 @@ def complete_employer_registration(
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
         
-        initial_tier = "EMAIL_VERIFIED"
         trust_score = 60
-        alt_verification = {}
     
     # STARTUPS: Alternative verification
     elif profile_data.company_type == "STARTUP":
-        alt_verification = {}
-        
         # Check LinkedIn if provided
         if profile_data.linkedin_url:
             linkedin_valid, linkedin_data = verify_linkedin_company(profile_data.linkedin_url)
@@ -70,15 +112,9 @@ def complete_employer_registration(
             alt_verification["website_checks"] = website_checks
             alt_verification["website_has_ssl"] = website_checks.get("has_ssl", False)
         
-        initial_tier = "EMAIL_VERIFIED" if alt_verification else "UNVERIFIED"
-        trust_score = 40
+        trust_score = 40 if alt_verification else 30
     
-    else:
-        initial_tier = "UNVERIFIED"
-        trust_score = 50
-        alt_verification = {}
-    
-    # Create employer
+    # Create/Update employer
     try:
         employer = employer_crud.create_or_update_employer_registration(
             db=db,
@@ -94,17 +130,24 @@ def complete_employer_registration(
             description=profile_data.description
         )
         
-        # Set company type fields
-        employer.company_type = profile_data.company_type
-        employer.is_startup = profile_data.is_startup
-        employer.startup_stage = profile_data.startup_stage
-        employer.founded_year = profile_data.founded_year
-        employer.verification_tier = initial_tier
-        employer.trust_score = trust_score
-        employer.alternative_verification_data = alt_verification
+        # Set verification fields (only if they exist in your model)
+        if hasattr(employer, 'company_type'):
+            employer.company_type = profile_data.company_type
+        if hasattr(employer, 'is_startup'):
+            employer.is_startup = profile_data.is_startup
+        if hasattr(employer, 'startup_stage'):
+            employer.startup_stage = profile_data.startup_stage
+        if hasattr(employer, 'founded_year'):
+            employer.founded_year = profile_data.founded_year
+        if hasattr(employer, 'verification_tier'):
+            employer.verification_tier = initial_tier
+        if hasattr(employer, 'trust_score'):
+            employer.trust_score = trust_score
+        if hasattr(employer, 'alternative_verification_data'):
+            employer.alternative_verification_data = alt_verification
         
         # Recalculate trust score for startups
-        if profile_data.company_type == "STARTUP":
+        if profile_data.company_type == "STARTUP" and hasattr(employer, 'trust_score'):
             employer.trust_score = calculate_startup_trust_score(employer)
         
         db.commit()
@@ -186,8 +229,8 @@ async def upload_logo(
 
 # ===== VERIFICATION SUBMISSION =====
 
-@router.post("/verification/submit")
-async def submit_verification_request(
+@router.post("/verification/submit-documents")
+async def submit_verification_documents(
     # Form fields
     rjsc_registration_number: Optional[str] = Form(None),
     trade_license_number: Optional[str] = Form(None),
@@ -205,7 +248,10 @@ async def submit_verification_request(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Submit company verification request"""
+    """
+    Submit company verification documents
+    Upgrades to DOCUMENT_VERIFIED tier automatically
+    """
     
     if current_user.role != UserRole.EMPLOYER:
         raise HTTPException(status_code=403, detail="Only employers can request verification")
@@ -214,13 +260,15 @@ async def submit_verification_request(
     if not employer:
         raise HTTPException(status_code=400, detail="Complete employer profile first")
     
-    if not employer.profile_completed:
+    # Check if profile completed (if field exists)
+    if hasattr(employer, 'profile_completed') and not employer.profile_completed:
         raise HTTPException(status_code=400, detail="Complete registration first")
     
-    if employer.verification_tier == "FULLY_VERIFIED":
-        raise HTTPException(status_code=400, detail="Already verified")
+    # Check if already fully verified
+    if hasattr(employer, 'verification_tier') and employer.verification_tier == "FULLY_VERIFIED":
+        raise HTTPException(status_code=400, detail="Already fully verified")
     
-    # VALIDATION
+    # VALIDATION - Must provide at least one complete document set
     has_valid_submission = (
         (rjsc_registration_number and incorporation_cert) or
         (trade_license_number and trade_license) or
@@ -230,7 +278,7 @@ async def submit_verification_request(
     if not has_valid_submission:
         raise HTTPException(
             status_code=400,
-            detail="Must provide at least ONE complete document set"
+            detail="Must provide at least ONE complete document set (number + file)"
         )
     
     # UPLOAD DOCUMENTS
@@ -312,27 +360,36 @@ async def submit_verification_request(
         notes_parts.append(f"LinkedIn: {linkedin_company_url}")
     if additional_notes:
         notes_parts.append(f"Notes: {additional_notes}")
-    if employer.verification_notes:
+    
+    # Get existing notes if field exists
+    if hasattr(employer, 'verification_notes') and employer.verification_notes:
         notes_parts.append(f"\n--- Previous Notes ---\n{employer.verification_notes}")
     
-    # Auto-upgrade to DOCUMENT_VERIFIED
-    employer.verification_tier = "DOCUMENT_VERIFIED"
-    employer.verification_documents = uploaded_docs
-    employer.rjsc_registration_number = rjsc_registration_number
-    employer.trade_license_number = trade_license_number
-    employer.tin_number = tin_number
-    employer.verification_notes = "\n".join(notes_parts)
-    employer.trust_score += 15
+    # Update fields (only if they exist)
+    if hasattr(employer, 'verification_tier'):
+        employer.verification_tier = "DOCUMENT_VERIFIED"
+    if hasattr(employer, 'verification_documents'):
+        employer.verification_documents = uploaded_docs
+    if hasattr(employer, 'rjsc_registration_number'):
+        employer.rjsc_registration_number = rjsc_registration_number
+    if hasattr(employer, 'trade_license_number'):
+        employer.trade_license_number = trade_license_number
+    if hasattr(employer, 'tin_number'):
+        employer.tin_number = tin_number
+    if hasattr(employer, 'verification_notes'):
+        employer.verification_notes = "\n".join(notes_parts)
+    if hasattr(employer, 'trust_score'):
+        employer.trust_score = min(employer.trust_score + 15, 100)
     
     db.commit()
     db.refresh(employer)
     
     return {
-        "message": "Documents verified! Upgraded to DOCUMENT_VERIFIED. Admin will review for FULLY_VERIFIED status.",
-        "verification_tier": employer.verification_tier,
-        "trust_score": employer.trust_score,
+        "message": "Documents submitted! Upgraded to DOCUMENT_VERIFIED. Admin will review for FULLY_VERIFIED status.",
+        "verification_tier": getattr(employer, 'verification_tier', 'UNKNOWN'),
+        "trust_score": getattr(employer, 'trust_score', 0),
         "documents_uploaded": len(uploaded_docs),
-        "next_steps": "Admin review for FULLY_VERIFIED status"
+        "next_steps": "Wait for admin review to reach FULLY_VERIFIED status"
     }
 
 
@@ -346,10 +403,16 @@ def get_verification_status(
     if not employer:
         raise HTTPException(status_code=404, detail="Employer profile not found")
     
+    # Safe attribute access
+    verification_tier = getattr(employer, 'verification_tier', 'UNVERIFIED')
+    verified_at = getattr(employer, 'verified_at', None)
+    verification_docs = getattr(employer, 'verification_documents', [])
+    trust_score = getattr(employer, 'trust_score', 0)
+    
     return {
-        "status": employer.verification_tier,
-        "verified_at": employer.verified_at,
-        "documents_submitted": len(employer.verification_documents),
-        "trust_score": employer.trust_score,
-        "can_submit": employer.verification_tier in ["UNVERIFIED", "EMAIL_VERIFIED", "REJECTED"]
+        "status": verification_tier,
+        "verified_at": verified_at,
+        "documents_submitted": len(verification_docs) if verification_docs else 0,
+        "trust_score": trust_score,
+        "can_submit": verification_tier in ["UNVERIFIED", "EMAIL_VERIFIED", "REJECTED"]
     }

@@ -74,3 +74,17 @@ class Job(Base):
     #     back_populates="job",
     #     cascade="all, delete-orphan"
     # )
+
+    application_deadline: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        nullable=False  # ← REQUIRED!
+    )
+    
+    # Status tracking
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_closed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    closure_reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "deadline", "manual", "filled"
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -5,23 +5,64 @@ from fastapi.openapi.utils import get_openapi
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
+from contextlib import asynccontextmanager
+from apscheduler.schedulers.background import BackgroundScheduler
 from app.database import Base, engine
 from app.models import user, job_seeker, employer, job, resume, password_reset
 from app.utils.cloudinary_client import init_cloudinary
 from app.routes import admin_routes, auth_routes, employer_routes, job_routes, resume_routes, oauth_routes
+from app.routes.subscription_routes import router as subscription_router
+from app.tasks.job_closure import close_expired_jobs
 
 
 # Create tables
 Base.metadata.create_all(bind=engine)
 
 
-# Initialize FastAPI
+# Initialize Cloudinary
+init_cloudinary()
+
+
+# Create scheduler
+scheduler = BackgroundScheduler()
+
+
+# ===== LIFESPAN EVENT HANDLER (REPLACES @app.on_event) =====
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Manage application lifespan - handles startup and shutdown events
+    This replaces the deprecated @app.on_event decorators
+    """
+    # STARTUP
+    print("🚀 Starting Jobscape Backend API...")
+    
+    # Start background scheduler for job expiration
+    scheduler.add_job(
+        close_expired_jobs,
+        'interval',
+        hours=1,  # Run every hour
+        id='close_expired_jobs',
+        replace_existing=True
+    )
+    scheduler.start()
+    print("✅ Background scheduler started - checking job deadlines every hour")
+    
+    yield  # Application is running
+    
+    # SHUTDOWN
+    print("🛑 Shutting down Jobscape Backend API...")
+    scheduler.shutdown()
+    print("❌ Background scheduler stopped")
+
+
+# ===== INITIALIZE FASTAPI WITH LIFESPAN =====
 app = FastAPI(
     title="Jobscape Backend API",
     description="Job posting platform for Bangladesh IT sector",
     version="1.0.0",
-    swagger_ui_parameters={"persistAuthorization": True}  # ← Keep auth in Swagger after refresh
+    swagger_ui_parameters={"persistAuthorization": True},
+    lifespan=lifespan  # ← ADD THIS
 )
 
 
@@ -44,10 +85,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# Initialize Cloudinary
-init_cloudinary()
 
 
 # ===== CUSTOM OPENAPI SCHEMA (FOR SWAGGER AUTH) =====
@@ -93,6 +130,7 @@ def custom_openapi():
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
+
 # Override the default OpenAPI function
 app.openapi = custom_openapi
 
@@ -121,3 +159,4 @@ app.include_router(job_routes.router)
 app.include_router(resume_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(oauth_routes.router)
+app.include_router(subscription_router)
