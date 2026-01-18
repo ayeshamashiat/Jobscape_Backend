@@ -5,7 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import String, ForeignKey, Enum as SQLEnum, DateTime, func, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -59,4 +59,9 @@ class Resume(Base):
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now()
+    )
+
+    job_seeker = relationship(
+        "JobSeeker",
+        back_populates="resumes"
     )

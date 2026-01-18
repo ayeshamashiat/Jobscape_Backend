@@ -5,11 +5,11 @@ from app.database import get_db
 from app.crud import user_crud
 from app.crud import auth_crud
 from app.crud.auth_crud import verify_email, create_email_verification_token, create_password_reset_token, reset_password
-from app.schema.user_schema import UserCreate, UserResponse
+from app.schema.user_schema import UserCreate, UserResponse, JobSeekerBasicRegistration
 from app.schema.auth_schema import Token
 from app.schema.email_schema import EmailVerificationConfirm, EmailVerificationRequest
 from app.schema.password_schema import PasswordResetRequest, PasswordResetConfirm
-from app.utils.security import create_access_token, get_current_user, verify_password
+from app.utils.security import create_access_token, get_current_user, verify_password, hash_password
 from app.utils.email import send_verification_email, send_password_reset_email
 from app.models.user import User, UserRole
 from app.models.job_seeker import JobSeeker
@@ -22,39 +22,56 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 
 # ===================== REGISTRATION =====================
 
-@router.post("/register/job-seeker", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register_job_seeker(user: UserCreate, db: Session = Depends(get_db)):
+# app/routes/auth_routes.py
+
+@router.post("/register/job-seeker/basic", status_code=status.HTTP_201_CREATED)
+def register_job_seeker_basic(user: JobSeekerBasicRegistration, db: Session = Depends(get_db)):
     """
-    Register a new job seeker account
+    Step 1: Basic job seeker registration (email, password, full_name only).
+    User MUST upload CV next before account is fully active.
     """
+    
     # Check if user already exists
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
+        raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Create user with JOB_SEEKER role
-    new_user = user_crud.create_user(db, user.email, UserRole.JOB_SEEKER, user.password)  # ← FIXED
+    # Create user with is_active=False (account incomplete until CV uploaded)
+    new_user = User(
+        email=user.email,
+        hashed_password=hash_password(user.password),
+        role=UserRole.JOB_SEEKER,
+        is_active=False,  # ← CRITICAL: Inactive until CV uploaded
+        is_email_verified=False
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
     
-    # Create JobSeeker profile
+    # Create MINIMAL job seeker profile (only full_name, rest filled by CV)
     job_seeker = JobSeeker(
         user_id=new_user.id,
-        full_name=user.full_name,  # ✅ Now this will work!
-        profile_completed=False
+        full_name=user.full_name,
+        profile_completed=False  # ← Will be True after CV upload
     )
     db.add(job_seeker)
     db.commit()
-    db.refresh(job_seeker)
     
-    # Generate email verification token
+    # Generate email verification token (but don't send yet - wait for CV upload)
     token = create_email_verification_token(db, new_user)
     
-    # Send verification email
-    send_verification_email(new_user.email, token)
+    # Return temporary access token for CV upload
+    temp_token = create_access_token(
+        data={"sub": str(new_user.id)},
+        expires_delta=timedelta(minutes=30)  # Short-lived for CV upload only
+    )
     
-    return new_user
+    return {
+        "message": "Basic registration complete. Please upload your CV to continue.",
+        "user_id": str(new_user.id),
+        "temp_token": temp_token,
+        "next_step": "/resume/upload"
+    }
 
 
 @router.post("/register/employer", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -95,31 +112,38 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
 
 
 # ===================== LOGIN =====================
-
 @router.post("/login", response_model=Token)
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    """
-    Login with email and password to get access token
-    """
-    # Get user by email (username field is used for email)
+    """Login with email and password"""
+    
     user = user_crud.get_user_by_email(db, form_data.username)
     
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Incorrect email or password"
         )
     
-    # Verify password
+    if not user.hashed_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No password set for this account"
+        )
+    
     if not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Incorrect email or password"
+        )
+    
+    # ✅ CHECK: Is account active (CV uploaded)?
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please complete your registration by uploading your CV"
         )
     
     # Check if email is verified
@@ -132,14 +156,13 @@ def login(
     # Create access token
     access_token = create_access_token(
         data={"sub": str(user.id)},
-        expires_delta=timedelta(minutes=60 * 24)  # 24 hours
+        expires_delta=timedelta(minutes=60 * 24)
     )
     
     return {
         "access_token": access_token,
         "token_type": "bearer"
     }
-
 
 # ===================== EMAIL VERIFICATION =====================
 

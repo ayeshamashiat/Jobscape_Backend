@@ -56,69 +56,73 @@ class JobSeeker(Base):
         nullable=True
     )
 
+    # ===== INDUSTRY INFERENCE (NEW) =====
+    inferred_industries: Mapped[List[str]] = mapped_column(
+        JSONB,
+        default=list,
+        nullable=False,
+        comment="Industries parsed from resume"
+    )
+    
+    primary_industry: Mapped[Optional[str]] = mapped_column(
+        String,
+        nullable=True,
+        comment="Most relevant industry from CV"
+    )
+
     # JSONB fields for structured data
     education: Mapped[List[dict]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of education entries with institution, degree, field, year"
+        nullable=False
     )
 
     experience: Mapped[List[dict]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of work experience with company, position, duration, description"
+        nullable=False
     )
 
     skills: Mapped[List[str]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of technical and soft skills"
+        nullable=False
     )
     
-    # New comprehensive fields
     projects: Mapped[List[dict]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of projects with title, description, technologies, links"
+        nullable=False
     )
     
     certifications: Mapped[List[dict]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of certifications with name, issuer, date, credential_id"
+        nullable=False
     )
     
     awards: Mapped[List[dict]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of awards/achievements with title, issuer, date, description"
+        nullable=False
     )
     
     languages: Mapped[List[dict]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of languages with name and proficiency level"
+        nullable=False
     )
     
     publications: Mapped[List[dict]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of publications/papers with title, journal, date, link"
+        nullable=False
     )
     
     volunteer_experience: Mapped[List[dict]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="List of volunteer work with organization, role, duration, description"
+        nullable=False
     )
     
     # Social/Professional Links
@@ -140,8 +144,7 @@ class JobSeeker(Base):
     other_links: Mapped[List[str]] = mapped_column(
         JSONB,
         default=list,
-        nullable=False,
-        comment="Other professional links (Behance, Dribbble, etc.)"
+        nullable=False
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -153,8 +156,22 @@ class JobSeeker(Base):
         DateTime(timezone=True), 
         server_default=func.now(), 
         onupdate=func.now()
-    )  
+    )
 
     # Relationships
-    user = relationship("User", backref="job_seeker", uselist=False)
-    resumes = relationship("Resume", backref="job_seeker", cascade="all, delete-orphan")
+    user = relationship(
+        "User",
+        back_populates="job_seeker_profile"
+    )
+
+    resumes = relationship(
+        "Resume",
+        back_populates="job_seeker",
+        cascade="all, delete-orphan"
+    )
+
+    # applications = relationship(
+    #     "Application",
+    #     back_populates="job_seeker",
+    #     cascade="all, delete-orphan"
+    # )

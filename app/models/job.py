@@ -64,4 +64,13 @@ class Job(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    employer = relationship("Employer", backref="jobs")
+    employer = relationship(
+        "Employer",
+        back_populates="jobs"
+    )
+
+    # applications = relationship(
+    #     "Application",
+    #     back_populates="job",
+    #     cascade="all, delete-orphan"
+    # )

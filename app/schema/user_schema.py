@@ -12,6 +12,10 @@ class UserCreate(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=200)
     # Role is NOT here - it's set automatically by the route!
 
+class JobSeekerBasicRegistration(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    full_name: str = Field(..., min_length=1, max_length=200)
 
 # ----------------- User response -----------------
 class UserResponse(BaseModel):

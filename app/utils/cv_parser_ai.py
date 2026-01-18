@@ -2,22 +2,26 @@ from openai import OpenAI
 import os
 import json
 
-# DeepSeek uses OpenAI-compatible API
+
+# ✅ GROQ CLIENT (OpenAI-compatible API)
 client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com"
+    api_key=os.getenv("GROQ_API_KEY"),  # ← Changed
+    base_url="https://api.groq.com/openai/v1"  # ← Changed
 )
+
 
 def structure_resume_with_ai(resume_text: str) -> dict:
     """
-    Send extracted text to DeepSeek for comprehensive structured parsing
+    Send extracted text to Groq for comprehensive structured parsing
     """
     if not resume_text or len(resume_text.strip()) < 50:
         raise ValueError("Resume text is too short or empty")
     
     prompt = f"""You are an expert resume parser. Extract ALL relevant information from the following resume text.
 
+
 Return ONLY a valid JSON object with these exact keys (use null for missing info, [] for empty arrays):
+
 
 {{
   "name": "Full name",
@@ -114,6 +118,7 @@ Return ONLY a valid JSON object with these exact keys (use null for missing info
   }}
 }}
 
+
 IMPORTANT INSTRUCTIONS:
 - Extract ALL information present in the resume, even if fields seem optional
 - For Bangladeshi universities (e.g., IUT, BUET, DU), include full names
@@ -123,19 +128,20 @@ IMPORTANT INSTRUCTIONS:
 - Parse CGPA/GPA values accurately
 - Extract technical skills separately from soft skills if possible
 
+
 Resume text:
 {resume_text[:6000]}
 """
     
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="llama-3.3-70b-versatile",  # ← Changed to Groq model
             messages=[
                 {"role": "system", "content": "You are a precise resume parser optimized for software engineering and IT resumes. Output only valid JSON."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.1,  # Low temperature for consistent extraction
-            max_tokens=3000  # Increased for comprehensive data
+            temperature=0.1,
+            max_tokens=3000
         )
         
         result = response.choices[0].message.content.strip()
@@ -162,6 +168,7 @@ Resume text:
     except Exception as e:
         print(f"AI parsing error: {e}")
         raise ValueError(f"AI parsing failed: {str(e)}")
+
 
 
 def normalize_parsed_data(data: dict) -> dict:

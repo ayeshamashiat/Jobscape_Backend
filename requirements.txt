@@ -116,3 +116,6 @@ weasel==0.4.3
 websockets==15.0.1
 wrapt==2.0.1
 yarl==1.22.0
+google-auth==2.28.0                    # ← ADD
+google-auth-oauthlib==1.2.0            # ← ADD
+google-auth-httplib2==0.2.0          # ← ADD
