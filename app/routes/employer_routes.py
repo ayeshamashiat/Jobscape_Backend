@@ -1,20 +1,27 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.database import get_db
 from app.schema.employer_schema import (
     EmployerRegistrationCreate,
     EmployerProfileUpdate,
     EmployerProfileResponse
 )
+from app.schema.employer_schema import (
+    EmployerRegistrationCreate,
+    EmployerProfileUpdate,
+    EmployerProfileResponse,
+    WorkEmailVerificationConfirm,
+    WorkEmailVerificationStatusResponse
+)
 from app.schema.user_schema import UserCreate, UserResponse
 from app.crud import user_crud
 from app.crud import employer_crud
-from app.crud.auth_crud import create_email_verification_token  # ← ADD THIS
+from app.crud.auth_crud import create_email_verification_token, verify_work_email, resend_work_email_verification, create_work_email_verification_token  # ← ADD THIS
 from app.models.employer import Employer
 from app.utils.security import get_current_user
-from app.utils.email import send_verification_email
+from app.utils.email import send_verification_email, send_work_email_verification
 from app.utils.file_validators import validate_image_file, validate_document_file
 from app.utils.email_validators import verify_work_email_ownership
 from app.utils.startup_verifier import verify_linkedin_company, verify_website_legitimacy, calculate_startup_trust_score
@@ -28,8 +35,9 @@ router = APIRouter(prefix="/employer", tags=["employer"])
 # ===== SIMPLE REGISTRATION (Step 1) =====
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register_employer(user: UserCreate, db: Session = Depends(get_db)):
-    """Step 1: Register a new employer account (basic info only)"""
+    """Step 1: Register a new employer account - basic info only"""
     
+    # Check if user already exists
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
         raise HTTPException(
@@ -40,12 +48,13 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     # Create user
     new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)
     
-    # Create minimal Employer profile (only required fields)
+    # ✅ FIX: Add work_email as placeholder
     employer = Employer(
         user_id=new_user.id,
+        full_name=user.full_name,
+        work_email=user.email,           # ← USE EMAIL AS PLACEHOLDER
         company_name=user.full_name,
         company_email=user.email
-        # Everything else is nullable now!
     )
     
     db.add(employer)
@@ -59,6 +68,7 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     return new_user
 
 # ===== COMPLETE REGISTRATION (Step 2) =====
+
 @router.post("/register/complete", response_model=EmployerProfileResponse, status_code=status.HTTP_201_CREATED)
 def complete_employer_registration(
     profile_data: EmployerRegistrationCreate,
@@ -66,55 +76,31 @@ def complete_employer_registration(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Step 2: Complete employer registration after email verification
-    Adds company details and sets verification tier
+    Step 2: Complete employer registration
+    NOW: Sends work email verification code instead of granting tier immediately
     """
-    
+
     if current_user.role != UserRole.EMPLOYER:
         raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
-    
+
     # Check if already completed
     existing = employer_crud.get_employer_by_user_id(db, current_user.id)
     if existing and existing.profile_completed:
         raise HTTPException(status_code=400, detail="Registration already completed")
-    
-    # Determine verification tier based on company type
-    initial_tier = "EMAIL_VERIFIED"
-    trust_score = 50
-    alt_verification = {}
-    
-    # REGISTERED COMPANIES: Require email domain match
+
+    # Validate email domain for REGISTERED companies (basic check, not verification)
     if profile_data.company_type == "REGISTERED":
         if not profile_data.company_website:
             raise HTTPException(status_code=400, detail="Registered companies must provide website")
-        
+
         is_valid, error_msg = verify_work_email_ownership(
             profile_data.work_email,
             profile_data.company_website
         )
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
-        
-        trust_score = 60
-    
-    # STARTUPS: Alternative verification
-    elif profile_data.company_type == "STARTUP":
-        # Check LinkedIn if provided
-        if profile_data.linkedin_url:
-            linkedin_valid, linkedin_data = verify_linkedin_company(profile_data.linkedin_url)
-            alt_verification["linkedin_url"] = profile_data.linkedin_url
-            alt_verification["linkedin_valid"] = linkedin_valid
-            alt_verification["linkedin_data"] = linkedin_data
-        
-        # Check website if provided
-        if profile_data.company_website:
-            website_checks = verify_website_legitimacy(profile_data.company_website)
-            alt_verification["website_checks"] = website_checks
-            alt_verification["website_has_ssl"] = website_checks.get("has_ssl", False)
-        
-        trust_score = 40 if alt_verification else 30
-    
-    # Create/Update employer
+
+    # Create/Update employer profile
     try:
         employer = employer_crud.create_or_update_employer_registration(
             db=db,
@@ -129,8 +115,8 @@ def complete_employer_registration(
             company_size=profile_data.company_size,
             description=profile_data.description
         )
-        
-        # Set verification fields (only if they exist in your model)
+
+        # Set company type
         if hasattr(employer, 'company_type'):
             employer.company_type = profile_data.company_type
         if hasattr(employer, 'is_startup'):
@@ -139,25 +125,125 @@ def complete_employer_registration(
             employer.startup_stage = profile_data.startup_stage
         if hasattr(employer, 'founded_year'):
             employer.founded_year = profile_data.founded_year
-        if hasattr(employer, 'verification_tier'):
-            employer.verification_tier = initial_tier
-        if hasattr(employer, 'trust_score'):
-            employer.trust_score = trust_score
-        if hasattr(employer, 'alternative_verification_data'):
-            employer.alternative_verification_data = alt_verification
-        
-        # Recalculate trust score for startups
-        if profile_data.company_type == "STARTUP" and hasattr(employer, 'trust_score'):
-            employer.trust_score = calculate_startup_trust_score(employer)
-        
+
+        # ===== CRITICAL CHANGE: Start with UNVERIFIED tier =====
+        employer.verification_tier = "UNVERIFIED"
+        employer.trust_score = 20  # Very low until work email verified
+        employer.work_email_verified = False
+
         db.commit()
         db.refresh(employer)
-        
+
+        # ===== NEW: Generate and send work email verification code =====
+        code = create_work_email_verification_token(db, employer)
+        send_work_email_verification(
+            to_email=employer.work_email,
+            code=code,
+            company_name=employer.company_name
+        )
+
         return employer
-    
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+# ===== NEW: VERIFY WORK EMAIL =====
+
+@router.post("/verify-work-email/confirm")
+def confirm_work_email_verification(
+    request: WorkEmailVerificationConfirm,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Verify work email with 6-digit code
+    This ACTUALLY grants EMAIL_VERIFIED tier
+    """
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
+
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer profile not found")
+
+    try:
+        employer = verify_work_email(db, employer.id, request.verification_code)
+
+        return {
+            "message": "Work email verified successfully!",
+            "verification_tier": employer.verification_tier,
+            "trust_score": employer.trust_score,
+            "verified_at": employer.work_email_verified_at,
+            "can_post_jobs": employer.verification_tier in ["EMAIL_VERIFIED", "DOCUMENT_VERIFIED", "FULLY_VERIFIED"]
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ===== NEW: RESEND WORK EMAIL VERIFICATION =====
+
+@router.post("/verify-work-email/resend")
+def resend_work_email_code(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Resend work email verification code
+    Rate limited: 1 request per 2 minutes
+    """
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
+
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer profile not found")
+
+    try:
+        code = resend_work_email_verification(db, employer.id)
+        send_work_email_verification(
+            to_email=employer.work_email,
+            code=code,
+            company_name=employer.company_name
+        )
+
+        return {
+            "message": f"Verification code sent to {employer.work_email}",
+            "expires_in_minutes": 15
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ===== NEW: CHECK WORK EMAIL VERIFICATION STATUS =====
+
+@router.get("/verify-work-email/status", response_model=WorkEmailVerificationStatusResponse)
+def get_work_email_verification_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Check if work email is verified"""
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
+
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer profile not found")
+
+    # Check if code expired
+    code_expired = False
+    if employer.work_email_verification_sent_at and not employer.work_email_verified:
+        expiry_time = employer.work_email_verification_sent_at + timedelta(minutes=15)
+        code_expired = datetime.now(timezone.utc) > expiry_time
+
+    return WorkEmailVerificationStatusResponse(
+        work_email=employer.work_email,
+        work_email_verified=employer.work_email_verified,
+        verification_sent_at=employer.work_email_verification_sent_at,
+        code_expired=code_expired,
+        can_resend=not employer.work_email_verified,
+        verification_tier=employer.verification_tier
+    )
 
 # ===== PROFILE MANAGEMENT =====
 

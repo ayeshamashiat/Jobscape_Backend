@@ -69,11 +69,11 @@ class Job(Base):
         back_populates="jobs"
     )
 
-    # applications = relationship(
-    #     "Application",
-    #     back_populates="job",
-    #     cascade="all, delete-orphan"
-    # )
+    applications = relationship(
+        "Application",
+        back_populates="job",
+        cascade="all, delete-orphan"
+    )
 
     application_deadline: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 

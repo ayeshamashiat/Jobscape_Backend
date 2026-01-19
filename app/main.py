@@ -13,6 +13,7 @@ from app.utils.cloudinary_client import init_cloudinary
 from app.routes import admin_routes, auth_routes, employer_routes, job_routes, resume_routes, oauth_routes
 from app.routes.subscription_routes import router as subscription_router
 from app.tasks.job_closure import close_expired_jobs
+from app.routes.application_routes import router as application_router
 
 
 # Create tables
@@ -160,3 +161,4 @@ app.include_router(resume_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(oauth_routes.router)
 app.include_router(subscription_router)
+app.include_router(application_router)

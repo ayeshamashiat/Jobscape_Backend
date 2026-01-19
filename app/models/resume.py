@@ -65,3 +65,8 @@ class Resume(Base):
         "JobSeeker",
         back_populates="resumes"
     )
+
+    applications = relationship(
+        "Application",
+        back_populates="resume"
+    )
