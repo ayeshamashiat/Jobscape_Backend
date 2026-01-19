@@ -1,8 +1,8 @@
-"""Initial schema with all models
+"""some message
 
-Revision ID: 34d7dd6be854
+Revision ID: d2878ea5283f
 Revises: 
-Create Date: 2026-01-17 17:12:05.882787
+Create Date: 2026-01-19 13:45:59.087231
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '34d7dd6be854'
+revision: str = 'd2878ea5283f'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -26,12 +26,14 @@ def upgrade() -> None:
     sa.Column('email', sa.String(), nullable=False),
     sa.Column('hashed_password', sa.String(), nullable=True),
     sa.Column('role', sa.Enum('JOB_SEEKER', 'EMPLOYER', 'ADMIN', name='userrole'), nullable=False),
-    sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('is_email_verified', sa.Boolean(), nullable=False),
-    sa.Column('email_verification_token', sa.String(), nullable=True),
-    sa.Column('email_verification_expiry', sa.DateTime(), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('oauth_provider', sa.String(), nullable=True),
     sa.Column('oauth_provider_id', sa.String(), nullable=True),
+    sa.Column('email_verification_token', sa.String(), nullable=True),
+    sa.Column('email_verification_expiry', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)

@@ -16,7 +16,7 @@ from app.tasks.job_closure import close_expired_jobs
 
 
 # Create tables
-Base.metadata.create_all(bind=engine)
+# Base.metadata.create_all(bind=engine)
 
 
 # Initialize Cloudinary
