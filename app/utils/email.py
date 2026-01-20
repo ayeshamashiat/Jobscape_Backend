@@ -1,199 +1,158 @@
+import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import os
-
-SMTP_EMAIL = os.getenv("SMTP_EMAIL")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-EMAIL_FROM = os.getenv("EMAIL_FROM", SMTP_EMAIL)
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
-def send_verification_email(to_email: str, token: str) -> bool:
-    """Send email verification link using Gmail SMTP"""
-    
-    if not SMTP_EMAIL or not SMTP_PASSWORD:
-        print("⚠️ SMTP not configured. Email not sent.")
-        print(f"📧 Verification token for {to_email}: {token}")
-        return False
-    
-    verification_url = f"{FRONTEND_URL}/verify-email?token={token}"
-    
-    try:
-        # Create message
-        msg = MIMEMultipart('alternative')
-        msg['From'] = EMAIL_FROM
-        msg['To'] = to_email
-        msg['Subject'] = "Verify Your Jobscape Account"
-        
-        # HTML content
-        html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-</head>
-<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4;">
-    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f4f4; padding: 20px;">
-        <tr>
-            <td align="center">
-                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                    <!-- Header -->
-                    <tr>
-                        <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                            <h1 style="margin: 0; color: #ffffff; font-size: 32px;">Welcome to Jobscape!</h1>
-                        </td>
-                    </tr>
-                    <!-- Content -->
-                    <tr>
-                        <td style="padding: 40px 30px;">
-                            <h2 style="margin: 0 0 20px 0; color: #333333; font-size: 24px;">Verify Your Email Address</h2>
-                            <p style="margin: 0 0 20px 0; color: #666666; font-size: 16px; line-height: 1.6;">
-                                Thanks for signing up! Please verify your email address by clicking the button below:
-                            </p>
-                            <table width="100%" cellpadding="0" cellspacing="0">
-                                <tr>
-                                    <td align="center" style="padding: 20px 0;">
-                                        <a href="{verification_url}" style="display: inline-block; padding: 15px 40px; background-color: #667eea; color: #ffffff; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
-                                            Verify Email
-                                        </a>
-                                    </td>
-                                </tr>
-                            </table>
-                            <p style="margin: 20px 0; color: #666666; font-size: 14px; line-height: 1.6;">
-                                Or copy and paste this link into your browser:
-                            </p>
-                            <p style="margin: 0 0 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 5px; word-break: break-all; font-size: 14px; color: #667eea;">
-                                {verification_url}
-                            </p>
-                            <p style="margin: 30px 0 0 0; padding-top: 30px; border-top: 1px solid #e0e0e0; color: #999999; font-size: 14px; line-height: 1.6;">
-                                This link will expire in 24 hours.<br>
-                                If you didn't create an account, you can safely ignore this email.
-                            </p>
-                        </td>
-                    </tr>
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-                            <p style="margin: 0; color: #999999; font-size: 12px;">
-                                © 2026 Jobscape. All rights reserved.
-                            </p>
-                        </td>
-                    </tr>
-                </table>
-            </td>
-        </tr>
-    </table>
-</body>
-</html>
-        """
-        
-        msg.attach(MIMEText(html, 'html'))
-        
-        # Send email via Gmail SMTP
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls()
-            server.login(SMTP_EMAIL, SMTP_PASSWORD)
-            server.send_message(msg)
-        
-        print(f"✅ Verification email sent to {to_email}")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Failed to send email: {e}")
-        print(f"📧 Verification token for {to_email}: {token}")
-        return False
+from typing import Optional
 
 
-def send_password_reset_email(to_email: str, token: str) -> bool:
-    """Send password reset link using Gmail SMTP"""
-    
-    if not SMTP_EMAIL or not SMTP_PASSWORD:
-        print("⚠️ SMTP not configured. Email not sent.")
-        print(f"📧 Reset token for {to_email}: {token}")
-        return False
-    
-    reset_url = f"{FRONTEND_URL}/reset-password?token={token}"
-    
+def send_email(to_email: str, subject: str, html_body: str, text_body: str):
+    """Send email using SMTP"""
     try:
         msg = MIMEMultipart('alternative')
-        msg['From'] = EMAIL_FROM
+        msg['Subject'] = subject
+        msg['From'] = os.getenv('SMTP_EMAIL')
         msg['To'] = to_email
-        msg['Subject'] = "Reset Your Jobscape Password"
-        
-        html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-</head>
-<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4;">
-    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f4f4; padding: 20px;">
-        <tr>
-            <td align="center">
-                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                    <!-- Header -->
-                    <tr>
-                        <td style="background-color: #dc3545; padding: 40px 30px; text-align: center;">
-                            <h1 style="margin: 0; color: #ffffff; font-size: 32px;">Password Reset</h1>
-                        </td>
-                    </tr>
-                    <!-- Content -->
-                    <tr>
-                        <td style="padding: 40px 30px;">
-                            <h2 style="margin: 0 0 20px 0; color: #333333; font-size: 24px;">Reset Your Password</h2>
-                            <p style="margin: 0 0 20px 0; color: #666666; font-size: 16px; line-height: 1.6;">
-                                We received a request to reset your password. Click the button below to create a new password:
-                            </p>
-                            <table width="100%" cellpadding="0" cellspacing="0">
-                                <tr>
-                                    <td align="center" style="padding: 20px 0;">
-                                        <a href="{reset_url}" style="display: inline-block; padding: 15px 40px; background-color: #dc3545; color: #ffffff; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
-                                            Reset Password
-                                        </a>
-                                    </td>
-                                </tr>
-                            </table>
-                            <p style="margin: 20px 0; color: #666666; font-size: 14px; line-height: 1.6;">
-                                Or copy and paste this link:
-                            </p>
-                            <p style="margin: 0 0 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 5px; word-break: break-all; font-size: 14px; color: #dc3545;">
-                                {reset_url}
-                            </p>
-                            <div style="margin: 30px 0; padding: 20px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 5px;">
-                                <p style="margin: 0; color: #856404; font-size: 14px; line-height: 1.6;">
-                                    <strong>Security Notice:</strong><br>
-                                    This link expires in 1 hour. If you didn't request a password reset, please ignore this email.
-                                </p>
-                            </div>
-                        </td>
-                    </tr>
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-                            <p style="margin: 0; color: #999999; font-size: 12px;">
-                                © 2026 Jobscape. All rights reserved.
-                            </p>
-                        </td>
-                    </tr>
-                </table>
-            </td>
-        </tr>
-    </table>
-</body>
-</html>
-        """
-        
-        msg.attach(MIMEText(html, 'html'))
-        
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+
+        # Attach both plain text and HTML versions
+        part1 = MIMEText(text_body, 'plain')
+        part2 = MIMEText(html_body, 'html')
+
+        msg.attach(part1)
+        msg.attach(part2)
+
+        # Send email
+        with smtplib.SMTP(os.getenv('EMAIL_HOST'), int(os.getenv('EMAIL_PORT'))) as server:
             server.starttls()
-            server.login(SMTP_EMAIL, SMTP_PASSWORD)
+            server.login(os.getenv('SMTP_EMAIL'), os.getenv('SMTP_PASSWORD'))
             server.send_message(msg)
-        
-        print(f"✅ Password reset email sent to {to_email}")
-        return True
-        
+
+        print(f"✅ Email sent to {to_email}")
+
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
-        print(f"📧 Reset token for {to_email}: {token}")
-        return False
+        print(f"❌ Email send failed: {e}")
+        raise
+
+
+def send_verification_email(to_email: str, token: str):
+    """Send account email verification link"""
+    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+    verify_url = f"{frontend_url}/verify-email/confirm?token={token}"
+
+    subject = "Verify your Jobscape account"
+
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif;">
+            <h2>Welcome to Jobscape!</h2>
+            <p>Please verify your email address by clicking the button below:</p>
+            <a href="{verify_url}" style="display: inline-block; padding: 10px 20px; background-color: #2563eb; color: white; text-decoration: none; border-radius: 5px;">
+                Verify Email
+            </a>
+            <p>Or copy this link: {verify_url}</p>
+            <p>This link expires in 24 hours.</p>
+        </body>
+    </html>
+    """
+
+    text_body = f"""
+    Welcome to Jobscape!
+
+    Please verify your email address by visiting: {verify_url}
+
+    This link expires in 24 hours.
+    """
+
+    send_email(to_email, subject, html_body, text_body)
+
+
+# ===== NEW: Work Email Verification =====
+
+def send_work_email_verification(to_email: str, code: str, company_name: str):
+    """
+    Send 6-digit verification code to work email
+    """
+    subject = f"Verify your work email - {code}"
+
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+                <h2 style="color: #2563eb;">Verify Your Work Email</h2>
+
+                <p>Hi {company_name},</p>
+
+                <p>Thank you for registering on <strong>Jobscape</strong>!</p>
+
+                <p>To complete your registration and verify your company email, please use the verification code below:</p>
+
+                <div style="background-color: #f0f0f0; padding: 20px; text-align: center; border-radius: 5px; margin: 20px 0;">
+                    <h1 style="font-size: 36px; letter-spacing: 8px; margin: 0; color: #2563eb; font-family: 'Courier New', monospace;">{code}</h1>
+                </div>
+
+                <p><strong>This code expires in 15 minutes.</strong></p>
+
+                <p>If you didn't request this verification, please ignore this email.</p>
+
+                <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+
+                <p style="color: #666; font-size: 12px;">
+                    This email was sent to {to_email} because you registered a company account on Jobscape.
+                </p>
+            </div>
+        </body>
+    </html>
+    """
+
+    text_body = f"""
+    Verify Your Work Email
+
+    Hi {company_name},
+
+    Thank you for registering on Jobscape!
+
+    Your verification code is: {code}
+
+    This code expires in 15 minutes.
+
+    If you didn't request this verification, please ignore this email.
+
+    ---
+    This email was sent to {to_email}
+    """
+
+    send_email(to_email, subject, html_body, text_body)
+
+
+def send_password_reset_email(to_email: str, token: str):
+    """Send password reset link"""
+    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+    reset_url = f"{frontend_url}/reset-password?token={token}"
+
+    subject = "Reset your Jobscape password"
+
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif;">
+            <h2>Password Reset Request</h2>
+            <p>Click the button below to reset your password:</p>
+            <a href="{reset_url}" style="display: inline-block; padding: 10px 20px; background-color: #2563eb; color: white; text-decoration: none; border-radius: 5px;">
+                Reset Password
+            </a>
+            <p>Or copy this link: {reset_url}</p>
+            <p>This link expires in 1 hour.</p>
+            <p>If you didn't request this, please ignore this email.</p>
+        </body>
+    </html>
+    """
+
+    text_body = f"""
+    Password Reset Request
+
+    Click this link to reset your password: {reset_url}
+
+    This link expires in 1 hour.
+
+    If you didn't request this, please ignore this email.
+    """
+
+    send_email(to_email, subject, html_body, text_body)

@@ -170,8 +170,8 @@ class JobSeeker(Base):
         cascade="all, delete-orphan"
     )
 
-    # applications = relationship(
-    #     "Application",
-    #     back_populates="job_seeker",
-    #     cascade="all, delete-orphan"
-    # )
+    applications = relationship(
+        "Application",
+        back_populates="job_seeker",
+        cascade="all, delete-orphan"
+    )
