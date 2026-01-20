@@ -6,11 +6,6 @@ from app.database import get_db
 from app.schema.employer_schema import (
     EmployerRegistrationCreate,
     EmployerProfileUpdate,
-    EmployerProfileResponse
-)
-from app.schema.employer_schema import (
-    EmployerRegistrationCreate,
-    EmployerProfileUpdate,
     EmployerProfileResponse,
     WorkEmailVerificationConfirm,
     WorkEmailVerificationStatusResponse
@@ -18,24 +13,34 @@ from app.schema.employer_schema import (
 from app.schema.user_schema import UserCreate, UserResponse
 from app.crud import user_crud
 from app.crud import employer_crud
-from app.crud.auth_crud import create_email_verification_token, verify_work_email, resend_work_email_verification, create_work_email_verification_token  # ← ADD THIS
+from app.crud.auth_crud import create_email_verification_token, verify_email, verify_work_email, resend_work_email_verification, create_work_email_verification_token
 from app.models.employer import Employer
+from app.models.user import User, UserRole
 from app.utils.security import get_current_user
 from app.utils.email import send_verification_email, send_work_email_verification
 from app.utils.file_validators import validate_image_file, validate_document_file
 from app.utils.email_validators import verify_work_email_ownership
 from app.utils.startup_verifier import verify_linkedin_company, verify_website_legitimacy, calculate_startup_trust_score
-from app.models.user import User, UserRole
 import cloudinary.uploader
-
+import os
 
 router = APIRouter(prefix="/employer", tags=["employer"])
+
+# ============== DEV MODE CONFIGURATION ==============
+DEV_MODE = os.getenv("ENVIRONMENT", "development") == "development"
+DEV_VERIFICATION_CODE = "123456"
+# ====================================================
 
 
 # ===== SIMPLE REGISTRATION (Step 1) =====
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register_employer(user: UserCreate, db: Session = Depends(get_db)):
-    """Step 1: Register a new employer account - basic info only"""
+    """
+    Step 1: Register a new employer account - basic info only
+    
+    DEV MODE: Returns verification code in response
+    PRODUCTION: Sends verification email
+    """
     
     # Check if user already exists
     existing_user = user_crud.get_user_by_email(db, user.email)
@@ -48,11 +53,11 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     # Create user
     new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)
     
-    # ✅ FIX: Add work_email as placeholder
+    # Create employer profile with placeholder work_email
     employer = Employer(
         user_id=new_user.id,
         full_name=user.full_name,
-        work_email=user.email,           # ← USE EMAIL AS PLACEHOLDER
+        work_email=user.email,  # Placeholder
         company_name=user.full_name,
         company_email=user.email
     )
@@ -61,14 +66,121 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(employer)
     
-    # Send verification email
-    token = create_email_verification_token(db, new_user)
-    send_verification_email(new_user.email, token)
+    # ============== EMAIL VERIFICATION ==============
+    if DEV_MODE:
+        # DEV: Return code directly
+        new_user.__dict__['dev_verification_code'] = DEV_VERIFICATION_CODE
+        new_user.__dict__['dev_mode'] = True
+    else:
+        # PRODUCTION: Send verification email
+        token = create_email_verification_token(db, new_user)
+        send_verification_email(new_user.email, token)
+    # ================================================
     
     return new_user
 
-# ===== COMPLETE REGISTRATION (Step 2) =====
 
+# ===== VERIFY EMAIL (Step 1.5) =====
+@router.post("/verify-email")
+def verify_user_email(
+    email: str = Form(...),
+    code: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Verify user email address
+    
+    DEV MODE: Accepts code "123456"
+    PRODUCTION: Validates against database token
+    """
+    user = db.query(User).filter(User.email == email).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user.is_email_verified:
+        raise HTTPException(status_code=400, detail="Email already verified")
+    
+    # ============== DEV MODE BYPASS ==============
+    if DEV_MODE and code == DEV_VERIFICATION_CODE:
+        user.is_email_verified = True
+        user.email_verification_token = None
+        user.email_verification_expiry = None
+        db.commit()
+        return {
+            "message": "Email verified successfully!",
+            "dev_mode": True
+        }
+    # =============================================
+    
+    # ============== PRODUCTION LOGIC ==============
+    # Validate token from database
+    if not user.email_verification_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No verification token found. Please request a new verification email."
+        )
+    
+    # Check if token matches
+    if user.email_verification_token != code:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+    
+    # Check if expired (24 hours)
+    if not user.email_verification_expiry:
+        raise HTTPException(status_code=400, detail="Verification token expired")
+    
+    if datetime.now(timezone.utc) > user.email_verification_expiry:
+        raise HTTPException(
+            status_code=400,
+            detail="Verification code expired. Please request a new one."
+        )
+    
+    # Mark as verified
+    user.is_email_verified = True
+    user.email_verification_token = None
+    user.email_verification_expiry = None
+    db.commit()
+    
+    return {
+        "message": "Email verified successfully!",
+        "email": user.email
+    }
+    # ==============================================
+
+
+# ===== RESEND EMAIL VERIFICATION =====
+@router.post("/verify-email/resend")
+def resend_email_verification(
+    email: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Resend email verification code"""
+    user = db.query(User).filter(User.email == email).first()
+    
+    if not user:
+        # Don't reveal if email exists (security)
+        return {"message": "If email exists, verification code has been sent"}
+    
+    if user.is_email_verified:
+        raise HTTPException(status_code=400, detail="Email already verified")
+    
+    # ============== DEV MODE ==============
+    if DEV_MODE:
+        return {
+            "message": f"Verification code: {DEV_VERIFICATION_CODE}",
+            "dev_mode": True,
+            "dev_code": DEV_VERIFICATION_CODE
+        }
+    # ======================================
+    
+    # PRODUCTION: Generate and send new token
+    token = create_email_verification_token(db, user)
+    send_verification_email(user.email, token)
+    
+    return {"message": "Verification email sent"}
+
+
+# ===== COMPLETE REGISTRATION (Step 2) =====
 @router.post("/register/complete", response_model=EmployerProfileResponse, status_code=status.HTTP_201_CREATED)
 def complete_employer_registration(
     profile_data: EmployerRegistrationCreate,
@@ -77,7 +189,7 @@ def complete_employer_registration(
 ):
     """
     Step 2: Complete employer registration
-    NOW: Sends work email verification code instead of granting tier immediately
+    Sends work email verification code
     """
 
     if current_user.role != UserRole.EMPLOYER:
@@ -88,7 +200,7 @@ def complete_employer_registration(
     if existing and existing.profile_completed:
         raise HTTPException(status_code=400, detail="Registration already completed")
 
-    # Validate email domain for REGISTERED companies (basic check, not verification)
+    # Validate email domain for REGISTERED companies
     if profile_data.company_type == "REGISTERED":
         if not profile_data.company_website:
             raise HTTPException(status_code=400, detail="Registered companies must provide website")
@@ -126,21 +238,27 @@ def complete_employer_registration(
         if hasattr(employer, 'founded_year'):
             employer.founded_year = profile_data.founded_year
 
-        # ===== CRITICAL CHANGE: Start with UNVERIFIED tier =====
+        # Start with UNVERIFIED tier
         employer.verification_tier = "UNVERIFIED"
-        employer.trust_score = 20  # Very low until work email verified
+        employer.trust_score = 20
         employer.work_email_verified = False
 
         db.commit()
         db.refresh(employer)
 
-        # ===== NEW: Generate and send work email verification code =====
-        code = create_work_email_verification_token(db, employer)
-        send_work_email_verification(
-            to_email=employer.work_email,
-            code=code,
-            company_name=employer.company_name
-        )
+        # ============== WORK EMAIL VERIFICATION ==============
+        if DEV_MODE:
+            # DEV: Code will be shown in frontend (123456)
+            pass
+        else:
+            # PRODUCTION: Send verification email
+            code = create_work_email_verification_token(db, employer)
+            send_work_email_verification(
+                to_email=employer.work_email,
+                code=code,
+                company_name=employer.company_name
+            )
+        # ====================================================
 
         return employer
 
@@ -148,8 +266,7 @@ def complete_employer_registration(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ===== NEW: VERIFY WORK EMAIL =====
-
+# ===== VERIFY WORK EMAIL =====
 @router.post("/verify-work-email/confirm")
 def confirm_work_email_verification(
     request: WorkEmailVerificationConfirm,
@@ -158,7 +275,10 @@ def confirm_work_email_verification(
 ):
     """
     Verify work email with 6-digit code
-    This ACTUALLY grants EMAIL_VERIFIED tier
+    Grants EMAIL_VERIFIED tier
+    
+    DEV MODE: Accepts "123456"
+    PRODUCTION: Validates against database
     """
     if current_user.role != UserRole.EMPLOYER:
         raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
@@ -167,6 +287,27 @@ def confirm_work_email_verification(
     if not employer:
         raise HTTPException(status_code=404, detail="Employer profile not found")
 
+    # ============== DEV MODE BYPASS ==============
+    if DEV_MODE and request.verification_code == DEV_VERIFICATION_CODE:
+        employer.work_email_verified = True
+        employer.work_email_verified_at = datetime.now(timezone.utc)
+        employer.verification_tier = "EMAIL_VERIFIED"
+        employer.trust_score = 50
+        employer.work_email_verification_token = None
+        db.commit()
+        db.refresh(employer)
+        
+        return {
+            "message": "Work email verified successfully! (DEV MODE)",
+            "verification_tier": employer.verification_tier,
+            "trust_score": employer.trust_score,
+            "verified_at": employer.work_email_verified_at,
+            "can_post_jobs": True,
+            "dev_mode": True
+        }
+    # =============================================
+
+    # ============== PRODUCTION LOGIC ==============
     try:
         employer = verify_work_email(db, employer.id, request.verification_code)
 
@@ -179,10 +320,10 @@ def confirm_work_email_verification(
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # ==============================================
 
 
-# ===== NEW: RESEND WORK EMAIL VERIFICATION =====
-
+# ===== RESEND WORK EMAIL VERIFICATION =====
 @router.post("/verify-work-email/resend")
 def resend_work_email_code(
     db: Session = Depends(get_db),
@@ -191,6 +332,8 @@ def resend_work_email_code(
     """
     Resend work email verification code
     Rate limited: 1 request per 2 minutes
+    
+    DEV MODE: Always returns "123456"
     """
     if current_user.role != UserRole.EMPLOYER:
         raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
@@ -199,6 +342,17 @@ def resend_work_email_code(
     if not employer:
         raise HTTPException(status_code=404, detail="Employer profile not found")
 
+    # ============== DEV MODE ==============
+    if DEV_MODE:
+        return {
+            "message": f"Verification code: {DEV_VERIFICATION_CODE}",
+            "expires_in_minutes": 15,
+            "dev_mode": True,
+            "dev_code": DEV_VERIFICATION_CODE
+        }
+    # ======================================
+
+    # PRODUCTION
     try:
         code = resend_work_email_verification(db, employer.id)
         send_work_email_verification(
@@ -215,8 +369,7 @@ def resend_work_email_code(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ===== NEW: CHECK WORK EMAIL VERIFICATION STATUS =====
-
+# ===== CHECK WORK EMAIL VERIFICATION STATUS =====
 @router.get("/verify-work-email/status", response_model=WorkEmailVerificationStatusResponse)
 def get_work_email_verification_status(
     db: Session = Depends(get_db),
@@ -245,8 +398,8 @@ def get_work_email_verification_status(
         verification_tier=employer.verification_tier
     )
 
-# ===== PROFILE MANAGEMENT =====
 
+# ===== PROFILE MANAGEMENT =====
 @router.get("/profile/me", response_model=EmployerProfileResponse)
 def get_my_employer_profile(
     db: Session = Depends(get_db),
@@ -314,7 +467,6 @@ async def upload_logo(
 
 
 # ===== VERIFICATION SUBMISSION =====
-
 @router.post("/verification/submit-documents")
 async def submit_verification_documents(
     # Form fields
@@ -334,10 +486,7 @@ async def submit_verification_documents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Submit company verification documents
-    Upgrades to DOCUMENT_VERIFIED tier automatically
-    """
+    """Submit company verification documents"""
     
     if current_user.role != UserRole.EMPLOYER:
         raise HTTPException(status_code=403, detail="Only employers can request verification")
@@ -346,15 +495,13 @@ async def submit_verification_documents(
     if not employer:
         raise HTTPException(status_code=400, detail="Complete employer profile first")
     
-    # Check if profile completed (if field exists)
     if hasattr(employer, 'profile_completed') and not employer.profile_completed:
         raise HTTPException(status_code=400, detail="Complete registration first")
     
-    # Check if already fully verified
     if hasattr(employer, 'verification_tier') and employer.verification_tier == "FULLY_VERIFIED":
         raise HTTPException(status_code=400, detail="Already fully verified")
     
-    # VALIDATION - Must provide at least one complete document set
+    # Validation
     has_valid_submission = (
         (rjsc_registration_number and incorporation_cert) or
         (trade_license_number and trade_license) or
@@ -367,7 +514,7 @@ async def submit_verification_documents(
             detail="Must provide at least ONE complete document set (number + file)"
         )
     
-    # UPLOAD DOCUMENTS
+    # Upload documents
     uploaded_docs = []
     
     try:
@@ -440,18 +587,16 @@ async def submit_verification_documents(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"File upload failed: {str(e)}")
     
-    # UPDATE EMPLOYER
+    # Update employer
     notes_parts = [f"Submitted: {datetime.now(timezone.utc).isoformat()}"]
     if linkedin_company_url:
         notes_parts.append(f"LinkedIn: {linkedin_company_url}")
     if additional_notes:
         notes_parts.append(f"Notes: {additional_notes}")
     
-    # Get existing notes if field exists
     if hasattr(employer, 'verification_notes') and employer.verification_notes:
         notes_parts.append(f"\n--- Previous Notes ---\n{employer.verification_notes}")
     
-    # Update fields (only if they exist)
     if hasattr(employer, 'verification_tier'):
         employer.verification_tier = "DOCUMENT_VERIFIED"
     if hasattr(employer, 'verification_documents'):
@@ -471,11 +616,10 @@ async def submit_verification_documents(
     db.refresh(employer)
     
     return {
-        "message": "Documents submitted! Upgraded to DOCUMENT_VERIFIED. Admin will review for FULLY_VERIFIED status.",
+        "message": "Documents submitted! Upgraded to DOCUMENT_VERIFIED.",
         "verification_tier": getattr(employer, 'verification_tier', 'UNKNOWN'),
         "trust_score": getattr(employer, 'trust_score', 0),
-        "documents_uploaded": len(uploaded_docs),
-        "next_steps": "Wait for admin review to reach FULLY_VERIFIED status"
+        "documents_uploaded": len(uploaded_docs)
     }
 
 
@@ -489,7 +633,6 @@ def get_verification_status(
     if not employer:
         raise HTTPException(status_code=404, detail="Employer profile not found")
     
-    # Safe attribute access
     verification_tier = getattr(employer, 'verification_tier', 'UNVERIFIED')
     verified_at = getattr(employer, 'verified_at', None)
     verification_docs = getattr(employer, 'verification_documents', [])
