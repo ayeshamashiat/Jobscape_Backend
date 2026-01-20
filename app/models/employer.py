@@ -63,6 +63,8 @@ class Employer(Base):
         nullable=True
     )
 
+    # is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     alternative_verification_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     alternative_verification_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     

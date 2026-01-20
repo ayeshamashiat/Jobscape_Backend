@@ -93,10 +93,10 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     # Create Employer profile
     employer = Employer(
         user_id=new_user.id,
-        company_name=user.full_name,  # ✅ Use full_name as initial company name
+        full_name=user.full_name,  # ✅ Use full_name as initial company name
         company_email=user.email,     # ← ADD THIS (required by Employer model)
         profile_completed=False,
-        is_verified=False
+        # is_verified=False
     )
     db.add(employer)
     db.commit()

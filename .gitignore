@@ -9,6 +9,10 @@ app/routes/__pycache__
 app/crud/__pycache__
 app/schema/__pycache__
 app/utils/__pycache__
+app/tests/__pycache__
+__pycache__
+.idea
+app/tasks/__pycache__
 .vscode
 show_files.py 
 all_files.txt
