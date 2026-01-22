@@ -4,7 +4,7 @@ from app.database import get_db
 from app.models.resume import Resume, ResumeParseStatus
 from app.models.job_seeker import JobSeeker
 from app.models.user import User, UserRole
-from app.utils.security import get_current_user
+from app.utils.security import get_current_user, get_current_user_or_cv_upload_user
 from app.utils.file_validators import validate_resume_file  # ✅ Import from your existing util
 from app.utils.text_extractor import extract_text_from_resume
 from app.utils.cv_parser_ai import structure_resume_with_ai
@@ -196,7 +196,7 @@ async def upload_resume(
 async def update_resume(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_or_cv_upload_user)
 ):
     """
     Replace existing CV with new one

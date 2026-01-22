@@ -131,3 +131,32 @@ def get_current_user(
 # No longer needed since is_active doesn't block registration flow
 # If you need to allow suspended users for specific endpoints, create:
 # def get_current_user_allow_suspended(...) instead
+
+def get_user_from_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        scope = payload.get("scope")
+        if not user_id:
+            return None, None
+        return user_id, scope
+    except JWTError:
+        return None, None
+
+def get_current_user_or_cv_upload_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    user_id, scope = get_user_from_token(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    # ✅ allow either normal auth token OR cv_upload scoped token
+    if scope and scope != "cv_upload":
+        raise HTTPException(status_code=403, detail="Token scope not allowed")
+
+    return user

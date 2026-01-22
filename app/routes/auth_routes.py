@@ -73,21 +73,21 @@ def register_job_seeker(user: JobSeekerBasicRegistration, db: Session = Depends(
     # Check if user already exists
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
-        # ✅ Auto-cleanup abandoned registrations (not active OR not verified)
         if not existing_user.is_email_verified:
-            # User started registration but never verified email - allow retry
-            jobseeker = db.query(JobSeeker).filter(JobSeeker.user_id == existing_user.id).first()
-            if jobseeker:
-                db.delete(jobseeker)
-            db.delete(existing_user)
-            db.commit()
+            token = create_email_verification_token(db, existing_user)
+            send_verification_email(existing_user.email, token)
+            return {
+                "message": "Account already exists but email is not verified. We've resent the verification email.",
+                "email": existing_user.email,
+                "next_step": "email_verification"
+            }
         else:
-            # Email is verified - account is real
             raise HTTPException(
                 status_code=400,
                 detail="Email already registered. Please login or reset your password.",
                 headers={"X-Registration-Status": "EMAIL_EXISTS"}
             )
+
     
     # ✅ Create user with is_active=True (matches employer pattern)
     new_user = User(
@@ -259,9 +259,15 @@ def confirm_email_verification(
     """
     try:
         user = verify_email(db, request.token)
+        cv_upload_token = create_access_token(
+            data={"sub": str(user.id), "scope": "cv_upload"},
+            expires_delta=timedelta(minutes=15)
+        )
+
         return {
             "message": "Email verified successfully",
-            "email": user.email
+            "email": user.email,
+            "cv_upload_token": cv_upload_token
         }
     except ValueError as e:
         raise HTTPException(
