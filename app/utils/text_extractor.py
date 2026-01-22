@@ -1,4 +1,7 @@
 import fitz  # PyMuPDF
+print("fitz imported from:", getattr(fitz, "__file__", "NO __file__"))
+print("fitz dir has open?:", hasattr(fitz, "open"))
+print("fitz keys sample:", [k for k in dir(fitz) if k in ("open", "Document")])
 from docx import Document
 import io
 from typing import Any

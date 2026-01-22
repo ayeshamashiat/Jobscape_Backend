@@ -134,6 +134,7 @@ async def upload_resume(
         return {
             "message": "CV uploaded successfully! Your profile is now complete. Please verify your email.",
             "resume_id": str(resume.id),
+            "email": current_user.email,
             "profile_completed": True,
             "email_verification_sent": True,
             "next_step": "Check your email to verify your account"
