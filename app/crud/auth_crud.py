@@ -33,10 +33,6 @@ def verify_email(db: Session, token: str) -> User:
     user.email_verification_token = None
     user.email_verification_expiry = None
     
-    # ✅ OPTIONAL: Update registration step (if you added it to User model)
-    # from app.models.user import RegistrationStep
-    # user.registration_step = RegistrationStep.EMAIL_VERIFIED
-    
     db.commit()
     db.refresh(user)
     return user
