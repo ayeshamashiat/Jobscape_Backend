@@ -19,58 +19,107 @@ from datetime import timedelta
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
+# ===================== RATE LIMITING =====================
+# Simple in-memory rate limiter (move to Redis in production)
+from collections import defaultdict
+from datetime import datetime
+
+_rate_limit_store = defaultdict(list)
+
+def check_rate_limit(email: str, max_attempts: int = 5, window_minutes: int = 60):
+    """Prevent registration spam"""
+    now = datetime.now()
+    cutoff = now - timedelta(minutes=window_minutes)
+    
+    # Clean old attempts
+    _rate_limit_store[email] = [
+        attempt for attempt in _rate_limit_store[email]
+        if attempt > cutoff
+    ]
+    
+    # Check limit
+    if len(_rate_limit_store[email]) >= max_attempts:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many registration attempts. Please try again in {window_minutes} minutes.",
+            headers={"Retry-After": str(window_minutes * 60)}
+        )
+    
+    # Record attempt
+    _rate_limit_store[email].append(now)
+
 
 # ===================== REGISTRATION =====================
 
 # app/routes/auth_routes.py
 
 @router.post("/register/job-seeker/basic", status_code=status.HTTP_201_CREATED)
-def register_job_seeker_basic(user: JobSeekerBasicRegistration, db: Session = Depends(get_db)):
+def register_job_seeker(user: JobSeekerBasicRegistration, db: Session = Depends(get_db)):
     """
-    Step 1: Basic job seeker registration (email, password, full_name only).
-    User MUST upload CV next before account is fully active.
+    Job Seeker Registration - Matches Employer Flow
+    
+    Flow:
+    1. Register with email/password/name → Email verification sent
+    2. User verifies email → Can now login
+    3. User uploads CV (optional but recommended) → Profile auto-populated
+    4. User can browse/apply to jobs
+    
+    CV upload is NOT required to activate account (unlike old flow)
     """
+    
+    # ✅ Rate limiting
+    check_rate_limit(user.email)
     
     # Check if user already exists
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        # ✅ Auto-cleanup abandoned registrations (not active OR not verified)
+        if not existing_user.is_email_verified:
+            # User started registration but never verified email - allow retry
+            jobseeker = db.query(JobSeeker).filter(JobSeeker.user_id == existing_user.id).first()
+            if jobseeker:
+                db.delete(jobseeker)
+            db.delete(existing_user)
+            db.commit()
+        else:
+            # Email is verified - account is real
+            raise HTTPException(
+                status_code=400,
+                detail="Email already registered. Please login or reset your password.",
+                headers={"X-Registration-Status": "EMAIL_EXISTS"}
+            )
     
-    # Create user with is_active=False (account incomplete until CV uploaded)
+    # ✅ Create user with is_active=True (matches employer pattern)
     new_user = User(
         email=user.email,
         hashed_password=hash_password(user.password),
         role=UserRole.JOB_SEEKER,
-        is_active=False,  # ← CRITICAL: Inactive until CV uploaded
+        is_active=True,  # ✅ CHANGED: User is active immediately (can login after email verification)
         is_email_verified=False
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     
-    # Create MINIMAL job seeker profile (only full_name, rest filled by CV)
+    # ✅ Create minimal job seeker profile
     job_seeker = JobSeeker(
         user_id=new_user.id,
         full_name=user.full_name,
-        profile_completed=False  # ← Will be True after CV upload
+        profile_completed=False  # Will become True after CV upload
     )
     db.add(job_seeker)
     db.commit()
     
-    # Generate email verification token (but don't send yet - wait for CV upload)
+    # ✅ Generate and SEND email verification immediately
     token = create_email_verification_token(db, new_user)
-    
-    # Return temporary access token for CV upload
-    temp_token = create_access_token(
-        data={"sub": str(new_user.id)},
-        expires_delta=timedelta(minutes=30)  # Short-lived for CV upload only
-    )
+    send_verification_email(new_user.email, token)
     
     return {
-        "message": "Basic registration complete. Please upload your CV to continue.",
+        "message": "Registration successful! Please check your email to verify your account.",
         "user_id": str(new_user.id),
-        "temp_token": temp_token,
-        "next_step": "/resume/upload"
+        "email": new_user.email,
+        "next_step": "email_verification",
+        "instructions": "Check your inbox and click the verification link. After verification, you can login and optionally upload your CV for better job matching."
     }
 
 
@@ -113,14 +162,10 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
 
 # ===================== LOGIN =====================
 @router.post("/login", response_model=Token)
-def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
-):
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """Login with email and password"""
     
-    user = user_crud.get_user_by_email(db, form_data.username)
-    
+    user = user_crud.getuserbyemail(db, form_data.username)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -139,30 +184,39 @@ def login(
             detail="Incorrect email or password"
         )
     
-    # ✅ CHECK: Is account active (CV uploaded)?
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please complete your registration by uploading your CV"
-        )
+    # ✅ REMOVED: is_active check (now always True)
     
-    # Check if email is verified
+    # Only check email verification
     if not user.is_email_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not verified. Please verify your email first."
+            detail="Email not verified. Please check your inbox.",
+            headers={
+                "X-Next-Step": "email_verification",
+                "X-User-Email": user.email
+            }
         )
     
     # Create access token
     access_token = create_access_token(
-        data={"sub": str(user.id)},
+        data={"sub": str(user.id)}, 
         expires_delta=timedelta(minutes=60 * 24)
     )
     
+    # Add profile completion status for job seekers
+    extra_data = {}
+    if user.role == UserRole.JOBSEEKER:
+        jobseeker = db.query(JobSeeker).filter(JobSeeker.userid == user.id).first()
+        if jobseeker:
+            extra_data["profile_completed"] = jobseeker.profile_completed
+            extra_data["next_step"] = "upload_cv" if not jobseeker.profile_completed else "browse_jobs"
+    
     return {
         "access_token": access_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        **extra_data
     }
+
 
 # ===================== EMAIL VERIFICATION =====================
 

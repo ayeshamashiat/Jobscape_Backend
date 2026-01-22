@@ -6,19 +6,24 @@ import secrets
 from app.models.employer import Employer
 import uuid
 
-# ----------------- Email Verification -----------------
+
+# ===================== EMAIL VERIFICATION =====================
+
 def create_email_verification_token(db: Session, user: User) -> str:
+    """Generate email verification token (expires in 24 hours)"""
     token = secrets.token_urlsafe(32)
     user.email_verification_token = token
-    user.email_verification_expiry = datetime.utcnow() + timedelta(hours=24)
+    user.email_verification_expiry = datetime.now(timezone.utc) + timedelta(hours=24)  # ✅ Fixed timezone
     db.commit()
     db.refresh(user)
     return token
 
+
 def verify_email(db: Session, token: str) -> User:
+    """Verify email using token"""
     user = db.query(User).filter(
         User.email_verification_token == token,
-        User.email_verification_expiry > datetime.utcnow()
+        User.email_verification_expiry > datetime.now(timezone.utc)  # ✅ Fixed timezone
     ).first()
     
     if not user:
@@ -27,10 +32,17 @@ def verify_email(db: Session, token: str) -> User:
     user.is_email_verified = True
     user.email_verification_token = None
     user.email_verification_expiry = None
+    
+    # ✅ OPTIONAL: Update registration step (if you added it to User model)
+    # from app.models.user import RegistrationStep
+    # user.registration_step = RegistrationStep.EMAIL_VERIFIED
+    
     db.commit()
     db.refresh(user)
     return user
-# ===== NEW: Work Email Verification (For Employers) =====
+
+
+# ===================== WORK EMAIL VERIFICATION (EMPLOYERS) =====================
 
 def create_work_email_verification_token(db: Session, employer: Employer) -> str:
     """
@@ -145,11 +157,14 @@ def resend_work_email_verification(db: Session, employer_id: uuid.UUID) -> str:
 
     return code
 
-# ----------------- Password Reset -----------------
+
+# ===================== PASSWORD RESET =====================
+
 def create_password_reset_token(db: Session, user: User) -> str:
+    """Generate password reset token (expires in 1 hour)"""
     # Check if user has a password (OAuth users don't)
     if not user.hashed_password:
-        raise ValueError("OAuth users cannot reset password")
+        raise ValueError("OAuth users cannot reset password. Please login with your social account.")
     
     token = secrets.token_urlsafe(32)
     
@@ -159,13 +174,15 @@ def create_password_reset_token(db: Session, user: User) -> str:
     reset_token = PasswordResetToken(
         user_id=user.id,
         token=token,
-        expires_at=datetime.utcnow() + timedelta(hours=1)
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1)  # ✅ Fixed timezone
     )
     db.add(reset_token)
     db.commit()
     return token
 
+
 def reset_password(db: Session, token: str, new_password: str) -> User:
+    """Reset user password using token"""
     from app.utils.security import hash_password
     
     reset_token = db.query(PasswordResetToken).filter(
@@ -173,12 +190,12 @@ def reset_password(db: Session, token: str, new_password: str) -> User:
     ).first()
     
     if not reset_token:
-        raise ValueError("Invalid token")
+        raise ValueError("Invalid reset token")
     
-    if datetime.utcnow() > reset_token.expires_at:
+    if datetime.now(timezone.utc) > reset_token.expires_at:  # ✅ Fixed timezone
         db.delete(reset_token)
         db.commit()
-        raise ValueError("Token expired")
+        raise ValueError("Reset token expired. Please request a new one.")
     
     user = db.query(User).filter(User.id == reset_token.user_id).first()
     if not user:
@@ -190,8 +207,11 @@ def reset_password(db: Session, token: str, new_password: str) -> User:
     db.refresh(user)
     return user
 
-# ----------------- OAuth -----------------
+
+# ===================== OAUTH =====================
+
 def get_or_create_oauth_user(db: Session, email: str, provider: str, provider_id: str) -> User:
+    """Get existing OAuth user or create new one"""
     from app.models.user import UserRole
     
     user = db.query(User).filter(User.email == email).first()
@@ -201,7 +221,8 @@ def get_or_create_oauth_user(db: Session, email: str, provider: str, provider_id
             role=UserRole.JOB_SEEKER,
             oauth_provider=provider,
             oauth_provider_id=provider_id,
-            is_email_verified=True  # OAuth emails are pre-verified
+            is_email_verified=True,  # OAuth emails are pre-verified
+            is_active=True  # ✅ Active by default (matches new flow)
         )
         db.add(user)
         db.commit()

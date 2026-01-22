@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 import enum
 
+
 if TYPE_CHECKING:
     from app.models.employer import Employer
     from app.models.job_seeker import JobSeeker
@@ -16,6 +17,14 @@ class UserRole(str, enum.Enum):
     JOB_SEEKER = "JOB_SEEKER"
     EMPLOYER = "EMPLOYER"
     ADMIN = "ADMIN"
+
+
+# ✅ OPTIONAL: Track registration progress for better UX
+class RegistrationStep(str, enum.Enum):
+    """Track user registration progress"""
+    ACCOUNT_CREATED = "ACCOUNT_CREATED"          # Just registered
+    EMAIL_VERIFIED = "EMAIL_VERIFIED"            # Email verified, can login
+    PROFILE_COMPLETED = "PROFILE_COMPLETED"      # CV uploaded (job seeker) or profile filled (employer)
 
 
 class User(Base):
@@ -30,7 +39,24 @@ class User(Base):
     hashed_password: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     role: Mapped[UserRole] = mapped_column(SQLEnum(UserRole), nullable=False, default=UserRole.JOB_SEEKER)
     is_email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    
+    # ✅ CHANGED: is_active now defaults to True
+    # Only set to False if admin suspends account (not for registration flow)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, 
+        default=True,  # ✅ Changed from False
+        nullable=False,
+        comment="False only if account is suspended by admin, not during registration"
+    )
+    
+    # ✅ OPTIONAL: Add registration step tracking for better UX
+    # Uncomment if you want this feature (requires migration)
+    registration_step: Mapped[RegistrationStep] = mapped_column(
+        SQLEnum(RegistrationStep),
+        default=RegistrationStep.ACCOUNT_CREATED,
+        nullable=False,
+        comment="Track user's registration progress"
+    )
     
     # OAuth
     oauth_provider: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -47,7 +73,7 @@ class User(Base):
     employer_profile: Mapped[Optional["Employer"]] = relationship(
         "Employer",
         back_populates="user",
-        foreign_keys="Employer.user_id",  # ← STRING FORMAT!
+        foreign_keys="Employer.user_id",  # STRING FORMAT
         uselist=False,
         cascade="all, delete-orphan"
     )
