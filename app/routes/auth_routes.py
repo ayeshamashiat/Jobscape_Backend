@@ -165,7 +165,7 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """Login with email and password"""
     
-    user = user_crud.getuserbyemail(db, form_data.username)
+    user = user_crud.get_user_by_email(db, form_data.username)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -205,8 +205,8 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     
     # Add profile completion status for job seekers
     extra_data = {}
-    if user.role == UserRole.JOBSEEKER:
-        jobseeker = db.query(JobSeeker).filter(JobSeeker.userid == user.id).first()
+    if user.role == UserRole.JOB_SEEKER:
+        jobseeker = db.query(JobSeeker).filter(JobSeeker.user_id == user.id).first()
         if jobseeker:
             extra_data["profile_completed"] = jobseeker.profile_completed
             extra_data["next_step"] = "upload_cv" if not jobseeker.profile_completed else "browse_jobs"

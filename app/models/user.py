@@ -19,13 +19,6 @@ class UserRole(str, enum.Enum):
     ADMIN = "ADMIN"
 
 
-# ✅ OPTIONAL: Track registration progress for better UX
-class RegistrationStep(str, enum.Enum):
-    """Track user registration progress"""
-    ACCOUNT_CREATED = "ACCOUNT_CREATED"          # Just registered
-    EMAIL_VERIFIED = "EMAIL_VERIFIED"            # Email verified, can login
-    PROFILE_COMPLETED = "PROFILE_COMPLETED"      # CV uploaded (job seeker) or profile filled (employer)
-
 
 class User(Base):
     __tablename__ = "users"
@@ -47,15 +40,6 @@ class User(Base):
         default=True,  # ✅ Changed from False
         nullable=False,
         comment="False only if account is suspended by admin, not during registration"
-    )
-    
-    # ✅ OPTIONAL: Add registration step tracking for better UX
-    # Uncomment if you want this feature (requires migration)
-    registration_step: Mapped[RegistrationStep] = mapped_column(
-        SQLEnum(RegistrationStep),
-        default=RegistrationStep.ACCOUNT_CREATED,
-        nullable=False,
-        comment="Track user's registration progress"
     )
     
     # OAuth
