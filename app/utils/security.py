@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 import os
 from dotenv import load_dotenv
+from app.models.user import User
 
 load_dotenv()
 
