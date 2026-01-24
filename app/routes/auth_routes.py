@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from httpx import request
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordRequestForm
 from app.database import get_db
@@ -15,9 +16,13 @@ from app.models.user import User, UserRole
 from app.models.job_seeker import JobSeeker
 from app.models.employer import Employer
 from datetime import timedelta
+from app.utils.security import oauth2_scheme
 
 
-router = APIRouter(prefix="/auth", tags=["authentication"])
+router = APIRouter(
+    prefix="/auth",
+    tags=["authentication"]
+)
 
 # ===================== RATE LIMITING =====================
 # Simple in-memory rate limiter (move to Redis in production)
@@ -330,10 +335,9 @@ def confirm_password_reset(
 # ===================== USER INFO =====================
 
 @router.get("/me", response_model=UserResponse)
-def get_current_user_info(current_user: User = Depends(get_current_user)):
-    """
-    Get current authenticated user's information
-    """
+def get_current_user_info(
+    current_user: User = Depends(get_current_user)
+):
     return current_user
 
 
