@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schema.auth_schema import Token
 from app.crud import auth_crud
+from app.models.user import User, UserRole
+from app.models.job_seeker import JobSeeker
 from app.utils.security import create_access_token
 from datetime import timedelta
 from pydantic import BaseModel
