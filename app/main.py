@@ -14,6 +14,7 @@ from app.routes import admin_routes, auth_routes, employer_routes, job_routes, r
 from app.routes.subscription_routes import router as subscription_router
 from app.tasks.job_closure import close_expired_jobs
 from app.routes.application_routes import router as application_router
+from app.routes.profile_routes import router as profile_picture_router
 
 
 # Create tables
@@ -62,7 +63,9 @@ app = FastAPI(
     title="Jobscape Backend API",
     description="Job posting platform for Bangladesh IT sector",
     version="1.0.0",
-    swagger_ui_parameters={"persistAuthorization": True},
+    swagger_ui_init_oauth={
+        "usePkceWithAuthorizationCodeGrant": True,
+    },
     lifespan=lifespan  # ← ADD THIS
 )
 
@@ -91,20 +94,20 @@ app.add_middleware(
 # ===== CUSTOM OPENAPI SCHEMA (FOR SWAGGER AUTH) =====
 def custom_openapi():
     """
-    Custom OpenAPI schema to show auth locks in Swagger UI.
-    This makes protected routes display with lock icons.
+    Show JWT Bearer lock icon for all protected routes.
+    Public routes are tagged with 'public'.
     """
     if app.openapi_schema:
         return app.openapi_schema
-    
+
     openapi_schema = get_openapi(
-        title="Jobscape Backend API",
-        version="1.0.0",
-        description="Job posting platform for Bangladesh IT sector",
+        title=app.title,
+        version=app.version,
+        description=app.description,
         routes=app.routes,
     )
-    
-    # Add security scheme for JWT Bearer tokens
+
+    # Add Bearer token security scheme
     openapi_schema["components"]["securitySchemes"] = {
         "BearerAuth": {
             "type": "http",
@@ -113,25 +116,23 @@ def custom_openapi():
             "description": "Enter your JWT token in the format: Bearer <token>"
         }
     }
-    
-    # Apply security globally to all routes (except public routes)
+
+    # Apply Bearer security globally except for public routes
     for path, path_item in openapi_schema["paths"].items():
         for method, operation in path_item.items():
-            if isinstance(operation, dict) and "tags" in operation:
-                # Skip auth for these public endpoints
-                if operation.get("tags") and any(
-                    tag in ["health", "authentication"] 
-                    for tag in operation.get("tags", [])
-                ):
-                    continue
-                
-                # Apply security to all other endpoints
+            if not isinstance(operation, dict):
+                continue
+
+            tags = operation.get("tags", [])
+            if "public" in tags or "health" in tags:
+                continue  # Skip public endpoints
+
+            # Only set security if not already set
+            if "security" not in operation:
                 operation["security"] = [{"BearerAuth": []}]
-    
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
-
-
 # Override the default OpenAPI function
 app.openapi = custom_openapi
 
@@ -162,3 +163,4 @@ app.include_router(admin_routes.router)
 app.include_router(oauth_routes.router)
 app.include_router(subscription_router)
 app.include_router(application_router)
+app.include_router(profile_picture_router)

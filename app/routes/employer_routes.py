@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone, timedelta
@@ -10,6 +10,22 @@ from app.schema.employer_schema import (
     WorkEmailVerificationConfirm,
     WorkEmailVerificationStatusResponse
 )
+from app.schema.job_schema import (
+    JobCreate,
+    JobUpdate,
+    JobResponse,
+    JobWithApplicationsResponse,
+    JobStatsResponse,
+    JobSearchResponse
+)
+from app.schema.employer_schema import (
+    EmployerDashboardStats,
+    JobApplicationSummary
+)
+from app.models.job import Job
+from app.models.application import Application
+from sqlalchemy import func, desc
+from typing import List
 from app.schema.user_schema import UserCreate, UserResponse
 from app.crud import user_crud
 from app.crud import employer_crud
@@ -38,11 +54,14 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     """
     Step 1: Register a new employer account - basic info only
     
+    Flow:
+    1. Create User record (email NOT verified)
+    2. Send verification email
+    3. NO Employer profile created yet
+    
     DEV MODE: Returns verification code in response
     PRODUCTION: Sends verification email
     """
-    
-    # Check if user already exists
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
         raise HTTPException(
@@ -50,135 +69,28 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
             detail="Email already registered"
         )
     
-    # Create user
+    # ✅ ONLY Create user (NO Employer profile yet)
     new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)
     
-    # Create employer profile with placeholder work_email
-    employer = Employer(
-        user_id=new_user.id,
-        full_name=user.full_name,
-        work_email=user.email,  # Placeholder
-        company_name=user.full_name,
-        company_email=user.email
-    )
-    
-    db.add(employer)
-    db.commit()
-    db.refresh(employer)
-    
-    # ============== EMAIL VERIFICATION ==============
+    # ✅ EMAIL VERIFICATION
     if DEV_MODE:
         # DEV: Return code directly
-        new_user.__dict__['dev_verification_code'] = DEV_VERIFICATION_CODE
-        new_user.__dict__['dev_mode'] = True
+        return {
+            "id": str(new_user.id),
+            "email": new_user.email,
+            "role": new_user.role.value,  # Assuming UserRole is an Enum
+            "is_email_verified": new_user.is_email_verified,
+            "is_active": new_user.is_active,
+            "created_at": new_user.created_at,
+            "dev_verification_code": DEV_VERIFICATION_CODE,
+            "devmode": True
+        }
     else:
         # PRODUCTION: Send verification email
         token = create_email_verification_token(db, new_user)
         send_verification_email(new_user.email, token)
-    # ================================================
     
     return new_user
-
-
-# ===== VERIFY EMAIL (Step 1.5) =====
-@router.post("/verify-email")
-def verify_user_email(
-    email: str = Form(...),
-    code: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """
-    Verify user email address
-    
-    DEV MODE: Accepts code "123456"
-    PRODUCTION: Validates against database token
-    """
-    user = db.query(User).filter(User.email == email).first()
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if user.is_email_verified:
-        raise HTTPException(status_code=400, detail="Email already verified")
-    
-    # ============== DEV MODE BYPASS ==============
-    if DEV_MODE and code == DEV_VERIFICATION_CODE:
-        user.is_email_verified = True
-        user.email_verification_token = None
-        user.email_verification_expiry = None
-        db.commit()
-        return {
-            "message": "Email verified successfully!",
-            "dev_mode": True
-        }
-    # =============================================
-    
-    # ============== PRODUCTION LOGIC ==============
-    # Validate token from database
-    if not user.email_verification_token:
-        raise HTTPException(
-            status_code=400,
-            detail="No verification token found. Please request a new verification email."
-        )
-    
-    # Check if token matches
-    if user.email_verification_token != code:
-        raise HTTPException(status_code=400, detail="Invalid verification code")
-    
-    # Check if expired (24 hours)
-    if not user.email_verification_expiry:
-        raise HTTPException(status_code=400, detail="Verification token expired")
-    
-    if datetime.now(timezone.utc) > user.email_verification_expiry:
-        raise HTTPException(
-            status_code=400,
-            detail="Verification code expired. Please request a new one."
-        )
-    
-    # Mark as verified
-    user.is_email_verified = True
-    user.email_verification_token = None
-    user.email_verification_expiry = None
-    db.commit()
-    
-    return {
-        "message": "Email verified successfully!",
-        "email": user.email
-    }
-    # ==============================================
-
-
-# ===== RESEND EMAIL VERIFICATION =====
-@router.post("/verify-email/resend")
-def resend_email_verification(
-    email: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """Resend email verification code"""
-    user = db.query(User).filter(User.email == email).first()
-    
-    if not user:
-        # Don't reveal if email exists (security)
-        return {"message": "If email exists, verification code has been sent"}
-    
-    if user.is_email_verified:
-        raise HTTPException(status_code=400, detail="Email already verified")
-    
-    # ============== DEV MODE ==============
-    if DEV_MODE:
-        return {
-            "message": f"Verification code: {DEV_VERIFICATION_CODE}",
-            "dev_mode": True,
-            "dev_code": DEV_VERIFICATION_CODE
-        }
-    # ======================================
-    
-    # PRODUCTION: Generate and send new token
-    token = create_email_verification_token(db, user)
-    send_verification_email(user.email, token)
-    
-    return {"message": "Verification email sent"}
-
 
 # ===== COMPLETE REGISTRATION (Step 2) =====
 @router.post("/register/complete", response_model=EmployerProfileResponse, status_code=status.HTTP_201_CREATED)
@@ -188,16 +100,24 @@ def complete_employer_registration(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Step 2: Complete employer registration
+    Step 3: Complete employer registration with company details
     Sends work email verification code
     """
 
     if current_user.role != UserRole.EMPLOYER:
         raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
 
+    # ✅ Check if email is verified
+    if not current_user.is_email_verified:
+        raise HTTPException(status_code=403, detail="Please verify your email first")
+
+    # Get employer profile (created after email verification)
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer profile not found. Please contact support.")
+
     # Check if already completed
-    existing = employer_crud.get_employer_by_user_id(db, current_user.id)
-    if existing and existing.profile_completed:
+    if employer.profile_completed:
         raise HTTPException(status_code=400, detail="Registration already completed")
 
     # Validate email domain for REGISTERED companies
@@ -212,21 +132,17 @@ def complete_employer_registration(
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
 
-    # Create/Update employer profile
+    # Update employer profile with complete data
     try:
-        employer = employer_crud.create_or_update_employer_registration(
-            db=db,
-            user_id=current_user.id,
-            full_name=profile_data.full_name,
-            job_title=profile_data.job_title,
-            work_email=profile_data.work_email,
-            company_name=profile_data.company_name,
-            company_website=profile_data.company_website,
-            industry=profile_data.industry,
-            location=profile_data.location,
-            company_size=profile_data.company_size,
-            description=profile_data.description
-        )
+        employer.full_name = profile_data.full_name
+        employer.job_title = profile_data.job_title
+        employer.work_email = profile_data.work_email
+        employer.company_name = profile_data.company_name
+        employer.company_website = profile_data.company_website
+        employer.industry = profile_data.industry
+        employer.location = profile_data.location
+        employer.company_size = profile_data.company_size
+        employer.description = profile_data.description
 
         # Set company type
         if hasattr(employer, 'company_type'):
@@ -237,6 +153,9 @@ def complete_employer_registration(
             employer.startup_stage = profile_data.startup_stage
         if hasattr(employer, 'founded_year'):
             employer.founded_year = profile_data.founded_year
+
+        # Mark profile as completed
+        employer.profile_completed = True
 
         # Start with UNVERIFIED tier
         employer.verification_tier = "UNVERIFIED"
@@ -264,6 +183,7 @@ def complete_employer_registration(
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 
 # ===== VERIFY WORK EMAIL =====
@@ -320,9 +240,7 @@ def confirm_work_email_verification(
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    # ==============================================
-
-
+    
 # ===== RESEND WORK EMAIL VERIFICATION =====
 @router.post("/verify-work-email/resend")
 def resend_work_email_code(
@@ -428,42 +346,6 @@ def update_employer_profile(
         return employer
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.post("/profile/logo")
-async def upload_logo(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Upload company logo"""
-    if current_user.role != UserRole.EMPLOYER:
-        raise HTTPException(status_code=403, detail="Only employers can upload logos")
-    
-    file_content = await validate_image_file(file)
-    
-    try:
-        upload_result = cloudinary.uploader.upload(
-            file_content,
-            folder="jobscape/employer_logos",
-            public_id=f"employer_{current_user.id}",
-            overwrite=True,
-            resource_type="image",
-            transformation=[
-                {"width": 400, "height": 400, "crop": "limit"},
-                {"quality": "auto"}
-            ]
-        )
-        logo_url = upload_result.get("secure_url")
-        
-        employer = employer_crud.update_employer_profile(
-            db=db,
-            user_id=current_user.id,
-            logo_url=logo_url
-        )
-        return {"logo_url": logo_url, "message": "Logo uploaded successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
 # ===== VERIFICATION SUBMISSION =====
@@ -645,3 +527,445 @@ def get_verification_status(
         "trust_score": trust_score,
         "can_submit": verification_tier in ["UNVERIFIED", "EMAIL_VERIFIED", "REJECTED"]
     }
+
+# ====================== DASHBOARD ======================
+
+@router.get("/dashboard/stats", response_model=EmployerDashboardStats)
+def get_dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get dashboard statistics for employer"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can access dashboard"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    # Get job stats
+    total_jobs = db.query(Job).filter(Job.employer_id == employer.id).count()
+    active_jobs = db.query(Job).filter(
+        Job.employer_id == employer.id,
+        Job.is_active == True,
+        Job.is_closed == False
+    ).count()
+    closed_jobs = db.query(Job).filter(
+        Job.employer_id == employer.id,
+        Job.is_closed == True
+    ).count()
+    
+    # Get application stats
+    job_ids = db.query(Job.id).filter(Job.employer_id == employer.id).subquery()
+    
+    total_applications = db.query(Application).filter(
+        Application.job_id.in_(job_ids)
+    ).count()
+    
+    pending_applications = db.query(Application).filter(
+        Application.job_id.in_(job_ids),
+        Application.status == "PENDING"
+    ).count()
+    
+    shortlisted_applications = db.query(Application).filter(
+        Application.job_id.in_(job_ids),
+        Application.status == "SHORTLISTED"
+    ).count()
+    
+    rejected_applications = db.query(Application).filter(
+        Application.job_id.in_(job_ids),
+        Application.status == "REJECTED"
+    ).count()
+    
+    return EmployerDashboardStats(
+        total_jobs_posted=total_jobs,
+        active_jobs=active_jobs,
+        closed_jobs=closed_jobs,
+        total_applications=total_applications,
+        pending_applications=pending_applications,
+        shortlisted_applications=shortlisted_applications,
+        rejected_applications=rejected_applications
+    )
+
+
+# ====================== JOB MANAGEMENT ======================
+
+@router.post("/jobs", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
+def create_job(
+    data: JobCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Create a new job posting"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can post jobs"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    # Check if work email is verified (required for posting jobs)
+    if not employer.work_email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your work email before posting jobs"
+        )
+    
+    # Validate salary range
+    if data.salary_min and data.salary_max:
+        if data.salary_max < data.salary_min:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Salary max must be greater than salary min"
+            )
+    
+    # Create job
+    job = Job(
+        employer_id=employer.id,
+        title=data.title,
+        description=data.description,
+        salary_min=data.salary_min,
+        salary_max=data.salary_max,
+        location=data.location,
+        work_mode=data.work_mode,
+        job_type=data.job_type,
+        experience_level=data.experience_level,
+        required_skills=data.required_skills,
+        preferred_skills=data.preferred_skills,
+        is_fresh_graduate_friendly=data.is_fresh_graduate_friendly,
+        application_deadline=data.application_deadline,
+        is_active=True,
+        is_closed=False
+    )
+    
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    
+    return job
+
+
+@router.get("/jobs", response_model=List[JobWithApplicationsResponse])
+def get_my_jobs(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    is_active: Optional[bool] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all jobs posted by current employer"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can access this endpoint"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    # Build query
+    query = db.query(Job).filter(Job.employer_id == employer.id)
+    
+    if is_active is not None:
+        query = query.filter(Job.is_active == is_active)
+    
+    # Get jobs
+    jobs = query.order_by(Job.created_at.desc()).offset(skip).limit(limit).all()
+    
+    # Add application counts
+    result = []
+    for job in jobs:
+        total_apps = db.query(Application).filter(Application.job_id == job.id).count()
+        new_apps = db.query(Application).filter(
+            Application.job_id == job.id,
+            Application.status == "PENDING"
+        ).count()
+        
+        job_dict = JobWithApplicationsResponse(
+            **job.__dict__,
+            total_applications=total_apps,
+            new_applications=new_apps,
+            company_name=employer.company_name
+        )
+        result.append(job_dict)
+    
+    return result
+
+
+@router.get("/jobs/{job_id}", response_model=JobResponse)
+def get_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get a specific job by ID"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can access this endpoint"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.employer_id == employer.id
+    ).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    return job
+
+
+@router.patch("/jobs/{job_id}", response_model=JobResponse)
+def update_job(
+    job_id: str,
+    data: JobUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update a job posting"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can update jobs"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.employer_id == employer.id
+    ).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    # Update fields
+    update_data = data.dict(exclude_unset=True)
+    
+    for field, value in update_data.items():
+        if hasattr(job, field):
+            setattr(job, field, value)
+    
+    db.commit()
+    db.refresh(job)
+    
+    return job
+
+
+@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a job posting"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can delete jobs"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.employer_id == employer.id
+    ).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    db.delete(job)
+    db.commit()
+    
+    return None
+
+
+@router.post("/jobs/{job_id}/close")
+def close_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Close a job posting"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can close jobs"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.employer_id == employer.id
+    ).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    job.is_active = False
+    job.is_closed = True
+    
+    db.commit()
+    
+    return {"message": "Job closed successfully"}
+
+
+@router.post("/jobs/{job_id}/reopen")
+def reopen_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Reopen a closed job"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can reopen jobs"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.employer_id == employer.id
+    ).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    job.is_active = True
+    job.is_closed = False
+    
+    db.commit()
+    
+    return {"message": "Job reopened successfully"}
+
+
+@router.get("/jobs/{job_id}/stats", response_model=JobStatsResponse)
+def get_job_stats(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get statistics for a specific job"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only employers can access job stats"
+        )
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employer profile not found"
+        )
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.employer_id == employer.id
+    ).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    # Get application stats
+    total_apps = db.query(Application).filter(Application.job_id == job.id).count()
+    pending_apps = db.query(Application).filter(
+        Application.job_id == job.id,
+        Application.status == "PENDING"
+    ).count()
+    shortlisted_apps = db.query(Application).filter(
+        Application.job_id == job.id,
+        Application.status == "SHORTLISTED"
+    ).count()
+    rejected_apps = db.query(Application).filter(
+        Application.job_id == job.id,
+        Application.status == "REJECTED"
+    ).count()
+    
+    acceptance_rate = (shortlisted_apps / total_apps * 100) if total_apps > 0 else 0.0
+    
+    return JobStatsResponse(
+        job_id=job.id,
+        job_title=job.title,
+        views=0,  # Implement view tracking later if needed
+        total_applications=total_apps,
+        pending_applications=pending_apps,
+        shortlisted_applications=shortlisted_apps,
+        rejected_applications=rejected_apps,
+        acceptance_rate=acceptance_rate
+    )
