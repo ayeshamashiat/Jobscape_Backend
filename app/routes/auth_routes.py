@@ -51,56 +51,57 @@ def check_rate_limit(email: str, max_attempts: int = 5, window_minutes: int = 60
 # ===================== REGISTRATION =====================
 
 @router.post("/register/job-seeker/basic", status_code=status.HTTP_201_CREATED, tags=["public"])
-def register_job_seeker(user: JobSeekerBasicRegistration, db: Session = Depends(get_db)):
+def register_jobseeker(user: JobSeekerBasicRegistration, db: Session = Depends(get_db)):
     """Job Seeker Registration"""
     check_rate_limit(user.email)
+    existinguser = user_crud.get_user_by_email(db, user.email)
     
-    existing_user = user_crud.get_user_by_email(db, user.email)
-    if existing_user:
-        if not existing_user.is_email_verified:
-            token = create_email_verification_token(db, existing_user)
-            send_verification_email(existing_user.email, token)
+    if existinguser:
+        if not existinguser.is_email_verified:
+            token = create_email_verification_token(db, existinguser)
+            send_verification_email(existinguser.email, token)
             return {
                 "message": "Account already exists but email is not verified. We've resent the verification email.",
-                "email": existing_user.email,
-                "next_step": "email_verification"
+                "email": existinguser.email,
+                "nextstep": "emailverification"
             }
         else:
             raise HTTPException(
                 status_code=400,
                 detail="Email already registered. Please login or reset your password.",
-                headers={"X-Registration-Status": "EMAIL_EXISTS"}
             )
     
-    new_user = User(
+    # 1. Create User
+    newuser = User(
         email=user.email,
         hashed_password=hash_password(user.password),
         role=UserRole.JOB_SEEKER,
         is_active=True,
-        is_email_verified=False
+        is_email_verified=False  # ❌ Not verified yet
     )
-    db.add(new_user)
+    db.add(newuser)
     db.commit()
-    db.refresh(new_user)
+    db.refresh(newuser)
     
-    job_seeker = JobSeeker(
-        user_id=new_user.id,
-        full_name=user.full_name,
-        profile_completed=False
+    # 2. **Create BASIC JobSeeker profile (not complete yet)**
+    jobseeker = JobSeeker(
+        userid=newuser.id,
+        fullname=user.full_name,  # ✅ From registration
+        profilecompleted=False    # ❌ Will be True after CV upload
     )
-    db.add(job_seeker)
+    db.add(jobseeker)
     db.commit()
     
-    token = create_email_verification_token(db, new_user)
-    send_verification_email(new_user.email, token)
+    # 3. Send verification email
+    token = create_email_verification_token(db, newuser)
+    send_verification_email(newuser.email, token)
     
     return {
         "message": "Registration successful! Please check your email to verify your account.",
-        "user_id": str(new_user.id),
-        "email": new_user.email,
-        "next_step": "email_verification"
+        "userid": str(newuser.id),
+        "email": newuser.email,
+        "nextstep": "emailverification"
     }
-
 
 @router.post("/register/employer", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["public"])
 def register_employer(user: UserCreate, db: Session = Depends(get_db)):
@@ -206,7 +207,10 @@ def request_email_verification(request: EmailVerificationRequest, db: Session = 
 
 @router.post("/verify-email/confirm", tags=["public"])
 def confirm_email_verification(request: EmailVerificationConfirm, db: Session = Depends(get_db)):
-    """Verify email using the token sent via email"""
+    """
+    Verify email using the token sent via email
+    Works for BOTH job seekers AND employers
+    """
     try:
         user = verify_email(db, request.token)
         
@@ -216,26 +220,72 @@ def confirm_email_verification(request: EmailVerificationConfirm, db: Session = 
             expires_delta=timedelta(days=30)
         )
         
-        # For job seekers, also create CV upload token
-        cv_upload_token = None
+        # ✅ CREATE PROFILE BASED ON ROLE
         if user.role == UserRole.JOB_SEEKER:
+            # Create JobSeeker profile if doesn't exist
+            existing_profile = db.query(JobSeeker).filter(JobSeeker.user_id == user.id).first()
+            if not existing_profile:
+                jobseeker = JobSeeker(
+                    user_id=user.id,
+                    full_name=user.email.split('@')[0],  # Placeholder
+                    profile_completed=False
+                )
+                db.add(jobseeker)
+                db.commit()
+            
+            # Create CV upload token for job seekers
             cv_upload_token = create_access_token(
                 data={"sub": str(user.id), "scope": "cv_upload"},
                 expires_delta=timedelta(minutes=15)
             )
-
-        return {
-            "message": "Email verified successfully",
-            "email": user.email,
-            "role": user.role.value,
-            "access_token": access_token,  # ✅ Return access token
-            "cv_upload_token": cv_upload_token  # Only for job seekers
-        }
+            
+            return {
+                "message": "Email verified successfully",
+                "email": user.email,
+                "role": user.role.value,
+                "access_token": access_token,
+                "cv_upload_token": cv_upload_token,
+                "next_step": "cv_upload"
+            }
+        
+        elif user.role == UserRole.EMPLOYER:
+            # Create Employer profile if doesn't exist
+            existing_profile = db.query(Employer).filter(Employer.user_id == user.id).first()
+            if not existing_profile:
+                employer = Employer(
+                    user_id=user.id,
+                    full_name=user.email.split('@')[0],  # Placeholder
+                    work_email=user.email,
+                    company_name="",  # Will be filled in /register/complete
+                    company_email=user.email,
+                    profile_completed=False
+                )
+                db.add(employer)
+                db.commit()
+            
+            return {
+                "message": "Email verified successfully",
+                "email": user.email,
+                "role": user.role.value,
+                "access_token": access_token,
+                "next_step": "complete_registration"
+            }
+        
+        else:
+            # Admin or other roles
+            return {
+                "message": "Email verified successfully",
+                "email": user.email,
+                "role": user.role.value,
+                "access_token": access_token
+            }
+    
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+
 
 # ===================== PASSWORD RESET =====================
 
@@ -295,37 +345,19 @@ def get_current_user_info(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-@router.get(
-    "/me/profile",
-    summary="Get user profile with role-specific data"
-)
-def get_user_profile(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+@router.get("/me/profile", summary="Get user profile with role-specific data")
+def getuserprofile(currentuser: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get current user's full profile"""
-    if current_user.role == UserRole.JOB_SEEKER:
-        profile = db.query(JobSeeker).filter(JobSeeker.user_id == current_user.id).first()
+    if currentuser.role == UserRole.JOB_SEEKER:
+        profile = db.query(JobSeeker).filter(JobSeeker.user_id == currentuser.id).first()
         if not profile:
             raise HTTPException(status_code=404, detail="Job seeker profile not found")
-        return {
-            "user": current_user,
-            "profile": profile,
-            "role": "job_seeker"
-        }
-    
-    elif current_user.role == UserRole.EMPLOYER:
-        profile = db.query(Employer).filter(Employer.user_id == current_user.id).first()
+        return {"user": currentuser, "profile": profile, "role": "jobseeker"}
+    elif currentuser.role == UserRole.EMPLOYER:
+        profile = db.query(Employer).filter(Employer.user_id == currentuser.id).first()
         if not profile:
             raise HTTPException(status_code=404, detail="Employer profile not found")
-        return {
-            "user": current_user,
-            "profile": profile,
-            "role": "employer"
-        }
-    
+        return {"user": currentuser, "profile": profile, "role": "employer"}
     else:
-        return {
-            "user": current_user,
-            "role": "admin"
-        }
+        return {"user": currentuser, "role": "admin"}
+

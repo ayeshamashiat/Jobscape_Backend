@@ -54,11 +54,14 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     """
     Step 1: Register a new employer account - basic info only
     
+    Flow:
+    1. Create User record (email NOT verified)
+    2. Send verification email
+    3. NO Employer profile created yet
+    
     DEV MODE: Returns verification code in response
     PRODUCTION: Sends verification email
     """
-    
-    # Check if user already exists
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
         raise HTTPException(
@@ -66,135 +69,28 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
             detail="Email already registered"
         )
     
-    # Create user
+    # ✅ ONLY Create user (NO Employer profile yet)
     new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)
     
-    # Create employer profile with placeholder work_email
-    employer = Employer(
-        user_id=new_user.id,
-        full_name=user.full_name,
-        work_email=user.email,  # Placeholder
-        company_name=user.full_name,
-        company_email=user.email
-    )
-    
-    db.add(employer)
-    db.commit()
-    db.refresh(employer)
-    
-    # ============== EMAIL VERIFICATION ==============
+    # ✅ EMAIL VERIFICATION
     if DEV_MODE:
         # DEV: Return code directly
-        new_user.__dict__['dev_verification_code'] = DEV_VERIFICATION_CODE
-        new_user.__dict__['dev_mode'] = True
+        return {
+            "id": str(new_user.id),
+            "email": new_user.email,
+            "role": new_user.role.value,  # Assuming UserRole is an Enum
+            "is_email_verified": new_user.is_email_verified,
+            "is_active": new_user.is_active,
+            "created_at": new_user.created_at,
+            "dev_verification_code": DEV_VERIFICATION_CODE,
+            "devmode": True
+        }
     else:
         # PRODUCTION: Send verification email
         token = create_email_verification_token(db, new_user)
         send_verification_email(new_user.email, token)
-    # ================================================
     
     return new_user
-
-
-# ===== VERIFY EMAIL (Step 1.5) =====
-@router.post("/verify-email")
-def verify_user_email(
-    email: str = Form(...),
-    code: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """
-    Verify user email address
-    
-    DEV MODE: Accepts code "123456"
-    PRODUCTION: Validates against database token
-    """
-    user = db.query(User).filter(User.email == email).first()
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if user.is_email_verified:
-        raise HTTPException(status_code=400, detail="Email already verified")
-    
-    # ============== DEV MODE BYPASS ==============
-    if DEV_MODE and code == DEV_VERIFICATION_CODE:
-        user.is_email_verified = True
-        user.email_verification_token = None
-        user.email_verification_expiry = None
-        db.commit()
-        return {
-            "message": "Email verified successfully!",
-            "dev_mode": True
-        }
-    # =============================================
-    
-    # ============== PRODUCTION LOGIC ==============
-    # Validate token from database
-    if not user.email_verification_token:
-        raise HTTPException(
-            status_code=400,
-            detail="No verification token found. Please request a new verification email."
-        )
-    
-    # Check if token matches
-    if user.email_verification_token != code:
-        raise HTTPException(status_code=400, detail="Invalid verification code")
-    
-    # Check if expired (24 hours)
-    if not user.email_verification_expiry:
-        raise HTTPException(status_code=400, detail="Verification token expired")
-    
-    if datetime.now(timezone.utc) > user.email_verification_expiry:
-        raise HTTPException(
-            status_code=400,
-            detail="Verification code expired. Please request a new one."
-        )
-    
-    # Mark as verified
-    user.is_email_verified = True
-    user.email_verification_token = None
-    user.email_verification_expiry = None
-    db.commit()
-    
-    return {
-        "message": "Email verified successfully!",
-        "email": user.email
-    }
-    # ==============================================
-
-
-# ===== RESEND EMAIL VERIFICATION =====
-@router.post("/verify-email/resend")
-def resend_email_verification(
-    email: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """Resend email verification code"""
-    user = db.query(User).filter(User.email == email).first()
-    
-    if not user:
-        # Don't reveal if email exists (security)
-        return {"message": "If email exists, verification code has been sent"}
-    
-    if user.is_email_verified:
-        raise HTTPException(status_code=400, detail="Email already verified")
-    
-    # ============== DEV MODE ==============
-    if DEV_MODE:
-        return {
-            "message": f"Verification code: {DEV_VERIFICATION_CODE}",
-            "dev_mode": True,
-            "dev_code": DEV_VERIFICATION_CODE
-        }
-    # ======================================
-    
-    # PRODUCTION: Generate and send new token
-    token = create_email_verification_token(db, user)
-    send_verification_email(user.email, token)
-    
-    return {"message": "Verification email sent"}
-
 
 # ===== COMPLETE REGISTRATION (Step 2) =====
 @router.post("/register/complete", response_model=EmployerProfileResponse, status_code=status.HTTP_201_CREATED)
@@ -204,16 +100,24 @@ def complete_employer_registration(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Step 2: Complete employer registration
+    Step 3: Complete employer registration with company details
     Sends work email verification code
     """
 
     if current_user.role != UserRole.EMPLOYER:
         raise HTTPException(status_code=403, detail="Only employers can use this endpoint")
 
+    # ✅ Check if email is verified
+    if not current_user.is_email_verified:
+        raise HTTPException(status_code=403, detail="Please verify your email first")
+
+    # Get employer profile (created after email verification)
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer profile not found. Please contact support.")
+
     # Check if already completed
-    existing = employer_crud.get_employer_by_user_id(db, current_user.id)
-    if existing and existing.profile_completed:
+    if employer.profile_completed:
         raise HTTPException(status_code=400, detail="Registration already completed")
 
     # Validate email domain for REGISTERED companies
@@ -228,21 +132,17 @@ def complete_employer_registration(
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
 
-    # Create/Update employer profile
+    # Update employer profile with complete data
     try:
-        employer = employer_crud.create_or_update_employer_registration(
-            db=db,
-            user_id=current_user.id,
-            full_name=profile_data.full_name,
-            job_title=profile_data.job_title,
-            work_email=profile_data.work_email,
-            company_name=profile_data.company_name,
-            company_website=profile_data.company_website,
-            industry=profile_data.industry,
-            location=profile_data.location,
-            company_size=profile_data.company_size,
-            description=profile_data.description
-        )
+        employer.full_name = profile_data.full_name
+        employer.job_title = profile_data.job_title
+        employer.work_email = profile_data.work_email
+        employer.company_name = profile_data.company_name
+        employer.company_website = profile_data.company_website
+        employer.industry = profile_data.industry
+        employer.location = profile_data.location
+        employer.company_size = profile_data.company_size
+        employer.description = profile_data.description
 
         # Set company type
         if hasattr(employer, 'company_type'):
@@ -253,6 +153,9 @@ def complete_employer_registration(
             employer.startup_stage = profile_data.startup_stage
         if hasattr(employer, 'founded_year'):
             employer.founded_year = profile_data.founded_year
+
+        # Mark profile as completed
+        employer.profile_completed = True
 
         # Start with UNVERIFIED tier
         employer.verification_tier = "UNVERIFIED"
@@ -280,6 +183,7 @@ def complete_employer_registration(
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 
 # ===== VERIFY WORK EMAIL =====
@@ -336,9 +240,7 @@ def confirm_work_email_verification(
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    # ==============================================
-
-
+    
 # ===== RESEND WORK EMAIL VERIFICATION =====
 @router.post("/verify-work-email/resend")
 def resend_work_email_code(
