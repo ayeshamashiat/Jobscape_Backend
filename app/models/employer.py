@@ -33,7 +33,7 @@ class Employer(Base):
 
     full_name: Mapped[str] = mapped_column(String, nullable=False)
     job_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    work_email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    work_email: Mapped[str] = mapped_column(String, nullable=True, unique=True)
 
     # Work Email Verification (NEW - Added for security)
     work_email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -46,11 +46,12 @@ class Employer(Base):
     company_name: Mapped[str] = mapped_column(String, nullable=False)
     company_email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     company_website: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    industry: Mapped[str] = mapped_column(String, nullable=False)
+    industry: Mapped[str] = mapped_column(String, nullable=True)
     company_size: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    location: Mapped[str] = mapped_column(String, nullable=False)
+    location: Mapped[str] = mapped_column(String, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     logo_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    cloudinary_public_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # ==================== VERIFICATION SYSTEM ====================
 

@@ -209,22 +209,33 @@ def confirm_email_verification(request: EmailVerificationConfirm, db: Session = 
     """Verify email using the token sent via email"""
     try:
         user = verify_email(db, request.token)
-        cv_upload_token = create_access_token(
-            data={"sub": str(user.id), "scope": "cv_upload"},
-            expires_delta=timedelta(minutes=15)
+        
+        # ✅ Create access token for auto-login
+        access_token = create_access_token(
+            data={"sub": str(user.id)},
+            expires_delta=timedelta(days=30)
         )
+        
+        # For job seekers, also create CV upload token
+        cv_upload_token = None
+        if user.role == UserRole.JOB_SEEKER:
+            cv_upload_token = create_access_token(
+                data={"sub": str(user.id), "scope": "cv_upload"},
+                expires_delta=timedelta(minutes=15)
+            )
 
         return {
             "message": "Email verified successfully",
             "email": user.email,
-            "cv_upload_token": cv_upload_token
+            "role": user.role.value,
+            "access_token": access_token,  # ✅ Return access token
+            "cv_upload_token": cv_upload_token  # Only for job seekers
         }
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-
 
 # ===================== PASSWORD RESET =====================
 

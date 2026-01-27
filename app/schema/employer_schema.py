@@ -111,3 +111,24 @@ class WorkEmailVerificationStatusResponse(BaseModel):
     code_expired: bool
     can_resend: bool
     verification_tier: str
+
+class EmployerDashboardStats(BaseModel):
+    """Dashboard statistics for employer"""
+    total_jobs_posted: int
+    active_jobs: int
+    closed_jobs: int
+    total_applications: int
+    pending_applications: int
+    shortlisted_applications: int
+    rejected_applications: int
+
+
+class JobApplicationSummary(BaseModel):
+    """Summary of applications for a specific job"""
+    job_id: UUID
+    job_title: str
+    total_applications: int
+    new_applications: int
+    shortlisted: int
+    rejected: int
+    pending_review: int

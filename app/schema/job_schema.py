@@ -134,3 +134,24 @@ class JobSearchResponse(BaseModel):
     pages: int
     has_next: bool
     has_prev: bool
+
+class JobWithApplicationsResponse(JobResponse):
+    """Job response with application count"""
+    total_applications: int = 0
+    new_applications: int = 0
+    company_name: Optional[str] = None
+
+
+class JobStatsResponse(BaseModel):
+    """Statistics for a specific job"""
+    job_id: UUID
+    job_title: str
+    views: int = 0
+    total_applications: int
+    pending_applications: int
+    shortlisted_applications: int
+    rejected_applications: int
+    acceptance_rate: float = 0.0
+    
+    class Config:
+        from_attributes = True
