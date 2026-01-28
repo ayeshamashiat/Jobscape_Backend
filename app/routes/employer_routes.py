@@ -64,10 +64,34 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     """
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
+        # ✅ ADD THIS: Handle unverified users
+        if not existing_user.is_email_verified:
+            token = create_email_verification_token(db, existing_user)
+            send_verification_email(existing_user.email, token)
+            
+            if DEV_MODE:
+                return {
+                    "id": str(existing_user.id),
+                    "email": existing_user.email,
+                    "role": existing_user.role.value,
+                    "is_email_verified": existing_user.is_email_verified,
+                    "is_active": existing_user.is_active,
+                    "created_at": existing_user.created_at,
+                    "dev_verification_code": DEV_VERIFICATION_CODE,
+                    "devmode": True,
+                    "message": "Account exists but not verified. We've resent the verification email."
+                }
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Account already exists but email is not verified. We've resent the verification email."
+                )
+        else:
+            # User exists and is verified
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered. Please login or reset your password."
+            )
     
     # ✅ ONLY Create user (NO Employer profile yet)
     new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)
@@ -78,7 +102,7 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
         return {
             "id": str(new_user.id),
             "email": new_user.email,
-            "role": new_user.role.value,  # Assuming UserRole is an Enum
+            "role": new_user.role.value,
             "is_email_verified": new_user.is_email_verified,
             "is_active": new_user.is_active,
             "created_at": new_user.created_at,
@@ -91,6 +115,7 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
         send_verification_email(new_user.email, token)
     
     return new_user
+
 
 # ===== COMPLETE REGISTRATION (Step 2) =====
 @router.post("/register/complete", response_model=EmployerProfileResponse, status_code=status.HTTP_201_CREATED)

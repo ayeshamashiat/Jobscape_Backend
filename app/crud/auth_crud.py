@@ -5,6 +5,9 @@ from datetime import datetime, timedelta, timezone
 import secrets
 from app.models.employer import Employer
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ===================== EMAIL VERIFICATION =====================
@@ -13,33 +16,85 @@ def create_email_verification_token(db: Session, user: User) -> str:
     """Generate email verification token (expires in 24 hours)"""
     token = secrets.token_urlsafe(32)
     user.email_verification_token = token
-    user.email_verification_expiry = datetime.now(timezone.utc) + timedelta(hours=24)  # ✅ Fixed timezone
+    user.email_verification_expiry = datetime.now(timezone.utc) + timedelta(hours=24)
+    
+    print(f"\n{'='*50}")
+    print(f"DEBUG: CREATING TOKEN")
+    print(f"User: {user.email}")
+    print(f"Token: {token}")
+    print(f"Expiry: {user.email_verification_expiry}")
+    print(f"{'='*50}\n")
+    
     db.commit()
     db.refresh(user)
+    
+    # ✅ ADD THIS: Verify it's actually in the database
+    verification_check = db.query(User).filter(
+        User.id == user.id
+    ).first()
+    
+    print(f"\n{'='*50}")
+    print(f"VERIFICATION CHECK:")
+    print(f"Token in DB: {verification_check.email_verification_token}")
+    print(f"Expiry in DB: {verification_check.email_verification_expiry}")
+    print(f"Match: {verification_check.email_verification_token == token}")
+    print(f"{'='*50}\n")
+    
+    if verification_check.email_verification_token != token:
+        print("⚠️ WARNING: Token not saved to database!")
+    
     return token
+
+
 
 
 def verify_email(db: Session, token: str) -> User:
     """Verify email using token"""
+    logger.info(f"===== EMAIL VERIFICATION DEBUG =====")
+    logger.info(f"Received token: {token}")
+    logger.info(f"Token length: {len(token)}")
+    logger.info(f"Current time: {datetime.now(timezone.utc)}")
+    
+    # Check if ANY user has this token (ignore expiry first)
+    user_with_token = db.query(User).filter(
+        User.email_verification_token == token
+    ).first()
+    
+    if user_with_token:
+        logger.info(f"Found user with token: {user_with_token.email}")
+        logger.info(f"Token expiry: {user_with_token.email_verification_expiry}")
+        
+        # Check if expiry is None
+        if user_with_token.email_verification_expiry is None:
+            logger.error(f"⚠️ TOKEN EXPIRY IS NONE! This means create_email_verification_token didn't save it properly")
+        else:
+            logger.info(f"Token expired: {user_with_token.email_verification_expiry < datetime.now(timezone.utc)}")
+    else:
+        logger.warning(f"NO USER FOUND WITH TOKEN: {token}")
+        # List all tokens in database for debugging
+        all_users = db.query(User).filter(User.email_verification_token.isnot(None)).all()
+        logger.info(f"All users with tokens: {[(u.email, u.email_verification_token[:20] if u.email_verification_token else 'None') for u in all_users]}")
+    
+    # Original query with expiry check
     user = db.query(User).filter(
         User.email_verification_token == token,
-        User.email_verification_expiry > datetime.now(timezone.utc)  # ✅ Fixed timezone
+        User.email_verification_expiry > datetime.now(timezone.utc)
     ).first()
     
     if not user:
         raise ValueError("Invalid or expired verification token")
     
+    logger.info(f"✅ Verification successful for {user.email}")
+    
     user.is_email_verified = True
     user.email_verification_token = None
     user.email_verification_expiry = None
     
-    # ✅ OPTIONAL: Update registration step (if you added it to User model)
-    # from app.models.user import RegistrationStep
-    # user.registration_step = RegistrationStep.EMAIL_VERIFIED
-    
     db.commit()
     db.refresh(user)
     return user
+
+
 
 
 # ===================== WORK EMAIL VERIFICATION (EMPLOYERS) =====================

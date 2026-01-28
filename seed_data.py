@@ -63,7 +63,7 @@ def seed_database():
         )
         db.add(admin_user)
         db.commit()
-        print(f"✅ Admin created: admin@jobscape.com / admin123")
+        print(f"✅ Admin created: ayeshamashiat01@gmail.com / admin123")
         
         # ===== CREATE TEST EMPLOYERS =====
         print("\n🏢 Creating test employers...")

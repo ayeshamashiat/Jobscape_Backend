@@ -85,9 +85,9 @@ def register_jobseeker(user: JobSeekerBasicRegistration, db: Session = Depends(g
     
     # 2. **Create BASIC JobSeeker profile (not complete yet)**
     jobseeker = JobSeeker(
-        userid=newuser.id,
-        fullname=user.full_name,  # ✅ From registration
-        profilecompleted=False    # ❌ Will be True after CV upload
+        user_id=newuser.id,
+        full_name=user.full_name,  # ✅ From registration
+        profile_completed=False    # ❌ Will be True after CV upload
     )
     db.add(jobseeker)
     db.commit()
