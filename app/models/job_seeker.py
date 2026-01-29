@@ -158,6 +158,9 @@ class JobSeeker(Base):
         onupdate=func.now()
     )
 
+    profile_picture_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    cloudinary_public_id: Mapped[Optional[str]] = mapped_column(String, nullable=True) 
+
     # Relationships
     user = relationship(
         "User",
@@ -175,3 +178,11 @@ class JobSeeker(Base):
         back_populates="job_seeker",
         cascade="all, delete-orphan"
     )
+
+    saved_cover_letters = relationship(
+        "SavedCoverLetter", 
+        back_populates="jobseeker", 
+        cascade="all, delete-orphan"
+    )
+
+from app.models.cover_letter import SavedCoverLetter 

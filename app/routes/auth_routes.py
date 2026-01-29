@@ -15,15 +15,17 @@ from app.models.user import User, UserRole
 from app.models.job_seeker import JobSeeker
 from app.models.employer import Employer
 from datetime import timedelta
-
-
-router = APIRouter(prefix="/auth", tags=["authentication"])
-
-# ===================== RATE LIMITING =====================
-# Simple in-memory rate limiter (move to Redis in production)
 from collections import defaultdict
 from datetime import datetime
+from app.utils.security import oauth2_scheme
 
+
+router = APIRouter(
+    prefix="/auth",
+    tags=["authentication"]
+)
+
+# ===================== RATE LIMITING =====================
 _rate_limit_store = defaultdict(list)
 
 def check_rate_limit(email: str, max_attempts: int = 5, window_minutes: int = 60):
@@ -31,13 +33,11 @@ def check_rate_limit(email: str, max_attempts: int = 5, window_minutes: int = 60
     now = datetime.now()
     cutoff = now - timedelta(minutes=window_minutes)
     
-    # Clean old attempts
     _rate_limit_store[email] = [
         attempt for attempt in _rate_limit_store[email]
         if attempt > cutoff
     ]
     
-    # Check limit
     if len(_rate_limit_store[email]) >= max_attempts:
         raise HTTPException(
             status_code=429,
@@ -45,90 +45,67 @@ def check_rate_limit(email: str, max_attempts: int = 5, window_minutes: int = 60
             headers={"Retry-After": str(window_minutes * 60)}
         )
     
-    # Record attempt
     _rate_limit_store[email].append(now)
 
 
 # ===================== REGISTRATION =====================
 
-# app/routes/auth_routes.py
-
-@router.post("/register/job-seeker/basic", status_code=status.HTTP_201_CREATED)
-def register_job_seeker(user: JobSeekerBasicRegistration, db: Session = Depends(get_db)):
-    """
-    Job Seeker Registration - Matches Employer Flow
-    
-    Flow:
-    1. Register with email/password/name → Email verification sent
-    2. User verifies email → Can now login
-    3. User uploads CV (optional but recommended) → Profile auto-populated
-    4. User can browse/apply to jobs
-    
-    CV upload is NOT required to activate account (unlike old flow)
-    """
-    
-    # ✅ Rate limiting
+@router.post("/register/job-seeker/basic", status_code=status.HTTP_201_CREATED, tags=["public"])
+def register_jobseeker(user: JobSeekerBasicRegistration, db: Session = Depends(get_db)):
+    """Job Seeker Registration"""
     check_rate_limit(user.email)
+    existinguser = user_crud.get_user_by_email(db, user.email)
     
-    # Check if user already exists
-    existing_user = user_crud.get_user_by_email(db, user.email)
-    if existing_user:
-        # ✅ Auto-cleanup abandoned registrations (not active OR not verified)
-        if not existing_user.is_email_verified:
-            # User started registration but never verified email - allow retry
-            jobseeker = db.query(JobSeeker).filter(JobSeeker.user_id == existing_user.id).first()
-            if jobseeker:
-                db.delete(jobseeker)
-            db.delete(existing_user)
-            db.commit()
+    if existinguser:
+        if not existinguser.is_email_verified:
+            token = create_email_verification_token(db, existinguser)
+            send_verification_email(existinguser.email, token)
+            return {
+                "message": "Account already exists but email is not verified. We've resent the verification email.",
+                "email": existinguser.email,
+                "nextstep": "emailverification"
+            }
         else:
-            # Email is verified - account is real
             raise HTTPException(
                 status_code=400,
                 detail="Email already registered. Please login or reset your password.",
-                headers={"X-Registration-Status": "EMAIL_EXISTS"}
             )
     
-    # ✅ Create user with is_active=True (matches employer pattern)
-    new_user = User(
+    # 1. Create User
+    newuser = User(
         email=user.email,
         hashed_password=hash_password(user.password),
         role=UserRole.JOB_SEEKER,
-        is_active=True,  # ✅ CHANGED: User is active immediately (can login after email verification)
-        is_email_verified=False
+        is_active=True,
+        is_email_verified=False  # ❌ Not verified yet
     )
-    db.add(new_user)
+    db.add(newuser)
     db.commit()
-    db.refresh(new_user)
+    db.refresh(newuser)
     
-    # ✅ Create minimal job seeker profile
-    job_seeker = JobSeeker(
-        user_id=new_user.id,
-        full_name=user.full_name,
-        profile_completed=False  # Will become True after CV upload
+    # 2. **Create BASIC JobSeeker profile (not complete yet)**
+    jobseeker = JobSeeker(
+        user_id=newuser.id,
+        full_name=user.full_name,  # ✅ From registration
+        profile_completed=False    # ❌ Will be True after CV upload
     )
-    db.add(job_seeker)
+    db.add(jobseeker)
     db.commit()
     
-    # ✅ Generate and SEND email verification immediately
-    token = create_email_verification_token(db, new_user)
-    send_verification_email(new_user.email, token)
+    # 3. Send verification email
+    token = create_email_verification_token(db, newuser)
+    send_verification_email(newuser.email, token)
     
     return {
         "message": "Registration successful! Please check your email to verify your account.",
-        "user_id": str(new_user.id),
-        "email": new_user.email,
-        "next_step": "email_verification",
-        "instructions": "Check your inbox and click the verification link. After verification, you can login and optionally upload your CV for better job matching."
+        "userid": str(newuser.id),
+        "email": newuser.email,
+        "nextstep": "emailverification"
     }
 
-
-@router.post("/register/employer", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register/employer", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["public"])
 def register_employer(user: UserCreate, db: Session = Depends(get_db)):
-    """
-    Register a new employer account
-    """
-    # Check if user already exists
+    """Register a new employer account"""
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
         raise HTTPException(
@@ -136,36 +113,29 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
             detail="Email already registered"
         )
     
-    # Create user with EMPLOYER role
-    new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)  # ← FIXED
+    new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)
     
-    # Create Employer profile
     employer = Employer(
         user_id=new_user.id,
-        full_name=user.full_name,  # ✅ Use full_name as initial company name
-        company_email=user.email,     # ← ADD THIS (required by Employer model)
-        profile_completed=False,
-        # is_verified=False
+        company_name=user.full_name,
+        company_email=user.email,
+        profile_completed=False
     )
     db.add(employer)
     db.commit()
     db.refresh(employer)
     
-    # Generate email verification token
     token = create_email_verification_token(db, new_user)
-    
-    # Send verification email
     send_verification_email(new_user.email, token)
     
     return new_user
 
 
 # ===================== LOGIN =====================
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=Token, tags=["public"])
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """Login with email and password"""
-    
-    user = user_crud.getuserbyemail(db, form_data.username)
+    user = user_crud.get_user_by_email(db, form_data.username)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -184,9 +154,6 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             detail="Incorrect email or password"
         )
     
-    # ✅ REMOVED: is_active check (now always True)
-    
-    # Only check email verification
     if not user.is_email_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -197,16 +164,14 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             }
         )
     
-    # Create access token
     access_token = create_access_token(
         data={"sub": str(user.id)}, 
         expires_delta=timedelta(minutes=60 * 24)
     )
     
-    # Add profile completion status for job seekers
     extra_data = {}
-    if user.role == UserRole.JOBSEEKER:
-        jobseeker = db.query(JobSeeker).filter(JobSeeker.userid == user.id).first()
+    if user.role == UserRole.JOB_SEEKER:
+        jobseeker = db.query(JobSeeker).filter(JobSeeker.user_id == user.id).first()
         if jobseeker:
             extra_data["profile_completed"] = jobseeker.profile_completed
             extra_data["next_step"] = "upload_cv" if not jobseeker.profile_completed else "browse_jobs"
@@ -221,48 +186,106 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 # ===================== EMAIL VERIFICATION =====================
 
 @router.post("/verify-email/request")
-def request_email_verification(
-    request: EmailVerificationRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    Request a new email verification token
-    """
+def request_email_verification(request: EmailVerificationRequest, db: Session = Depends(get_db)):
     user = user_crud.get_user_by_email(db, request.email)
-    
     if not user:
-        # Don't reveal if email exists or not (security best practice)
         return {"message": "If email exists, verification link has been sent"}
     
+    # ✅ CHANGED: If already verified, just send them to login instead of erroring
     if user.is_email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already verified"
-        )
+        return {
+            "message": "Email already verified. Please login.",
+            "is_verified": True,
+            "redirect": "/login"
+        }
     
-    # Generate new token
+    # Clear old token before creating new one
+    user.email_verification_token = None
+    user.email_verification_expiry = None
+    db.commit()
+    
+    # Create new token
     token = create_email_verification_token(db, user)
-    
-    # Send verification email
-    send_verification_email(user.email, token)  # ← ACTIVATED
-    
+    send_verification_email(user.email, token)
     return {"message": "Verification email sent"}
 
 
-@router.post("/verify-email/confirm")
-def confirm_email_verification(
-    request: EmailVerificationConfirm,
-    db: Session = Depends(get_db)
-):
+
+@router.post("/verify-email/confirm", tags=["public"])
+def confirm_email_verification(request: EmailVerificationConfirm, db: Session = Depends(get_db)):
     """
     Verify email using the token sent via email
+    Works for BOTH job seekers AND employers
     """
     try:
         user = verify_email(db, request.token)
-        return {
-            "message": "Email verified successfully",
-            "email": user.email
-        }
+        
+        # ✅ Create access token for auto-login
+        access_token = create_access_token(
+            data={"sub": str(user.id)},
+            expires_delta=timedelta(days=30)
+        )
+        
+        # ✅ CREATE PROFILE BASED ON ROLE
+        if user.role == UserRole.JOB_SEEKER:
+            # Create JobSeeker profile if doesn't exist
+            existing_profile = db.query(JobSeeker).filter(JobSeeker.user_id == user.id).first()
+            if not existing_profile:
+                jobseeker = JobSeeker(
+                    user_id=user.id,
+                    full_name=user.email.split('@')[0],  # Placeholder
+                    profile_completed=False
+                )
+                db.add(jobseeker)
+                db.commit()
+            
+            # Create CV upload token for job seekers
+            cv_upload_token = create_access_token(
+                data={"sub": str(user.id), "scope": "cv_upload"},
+                expires_delta=timedelta(minutes=15)
+            )
+            
+            return {
+                "message": "Email verified successfully",
+                "email": user.email,
+                "role": user.role.value,
+                "access_token": access_token,
+                "cv_upload_token": cv_upload_token,
+                "next_step": "cv_upload"
+            }
+        
+        elif user.role == UserRole.EMPLOYER:
+            # Create Employer profile if doesn't exist
+            existing_profile = db.query(Employer).filter(Employer.user_id == user.id).first()
+            if not existing_profile:
+                employer = Employer(
+                    user_id=user.id,
+                    full_name=user.email.split('@')[0],  # Placeholder
+                    work_email=user.email,
+                    company_name="",  # Will be filled in /register/complete
+                    company_email=user.email,
+                    profile_completed=False
+                )
+                db.add(employer)
+                db.commit()
+            
+            return {
+                "message": "Email verified successfully",
+                "email": user.email,
+                "role": user.role.value,
+                "access_token": access_token,
+                "next_step": "complete_registration"
+            }
+        
+        else:
+            # Admin or other roles
+            return {
+                "message": "Email verified successfully",
+                "email": user.email,
+                "role": user.role.value,
+                "access_token": access_token
+            }
+    
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -272,25 +295,17 @@ def confirm_email_verification(
 
 # ===================== PASSWORD RESET =====================
 
-@router.post("/password-reset/request")
-def request_password_reset(
-    request: PasswordResetRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    Request a password reset token
-    """
+@router.post("/password-reset/request", tags=["public"])
+def request_password_reset(request: PasswordResetRequest, db: Session = Depends(get_db)):
+    """Request a password reset token"""
     user = user_crud.get_user_by_email(db, request.email)
     
     if not user:
-        # Don't reveal if email exists or not (security best practice)
         return {"message": "If email exists, password reset link has been sent"}
     
     try:
         token = create_password_reset_token(db, user)
-        
-        # Send password reset email
-        send_password_reset_email(user.email, token)  # ← ACTIVATED
+        send_password_reset_email(user.email, token)
         
         return {"message": "Password reset link sent to email"}
     except ValueError as e:
@@ -300,14 +315,9 @@ def request_password_reset(
         )
 
 
-@router.post("/password-reset/confirm")
-def confirm_password_reset(
-    request: PasswordResetConfirm,
-    db: Session = Depends(get_db)
-):
-    """
-    Reset password using the token sent via email
-    """
+@router.post("/password-reset/confirm", tags=["public"])
+def confirm_password_reset(request: PasswordResetConfirm, db: Session = Depends(get_db)):
+    """Reset password using the token sent via email"""
     try:
         user = reset_password(db, request.token, request.new_password)
         return {
@@ -322,45 +332,38 @@ def confirm_password_reset(
 
 
 # ===================== USER INFO =====================
+# ✅ CORRECT WAY: Just use Depends(get_current_user) - Swagger will pick it up automatically
 
-@router.get("/me", response_model=UserResponse)
+@router.get(
+    "/me",
+    response_model=UserResponse,
+    summary="Get current authenticated user info",
+    responses={
+        401: {"description": "Not authenticated"},
+        200: {"description": "Successful Response"}
+    }
+)
 def get_current_user_info(current_user: User = Depends(get_current_user)):
     """
-    Get current authenticated user's information
+    Returns the current authenticated user's info.
+    Requires Bearer token.
     """
     return current_user
 
 
-@router.get("/me/profile")
-def get_user_profile(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Get current user's full profile (with job seeker or employer data)
-    """
-    if current_user.role == UserRole.JOB_SEEKER:
-        profile = db.query(JobSeeker).filter(JobSeeker.user_id == current_user.id).first()
+@router.get("/me/profile", summary="Get user profile with role-specific data")
+def getuserprofile(currentuser: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get current user's full profile"""
+    if currentuser.role == UserRole.JOB_SEEKER:
+        profile = db.query(JobSeeker).filter(JobSeeker.user_id == currentuser.id).first()
         if not profile:
             raise HTTPException(status_code=404, detail="Job seeker profile not found")
-        return {
-            "user": current_user,
-            "profile": profile,
-            "role": "job_seeker"
-        }
-    
-    elif current_user.role == UserRole.EMPLOYER:
-        profile = db.query(Employer).filter(Employer.user_id == current_user.id).first()
+        return {"user": currentuser, "profile": profile, "role": "jobseeker"}
+    elif currentuser.role == UserRole.EMPLOYER:
+        profile = db.query(Employer).filter(Employer.user_id == currentuser.id).first()
         if not profile:
             raise HTTPException(status_code=404, detail="Employer profile not found")
-        return {
-            "user": current_user,
-            "profile": profile,
-            "role": "employer"
-        }
-    
+        return {"user": currentuser, "profile": profile, "role": "employer"}
     else:
-        return {
-            "user": current_user,
-            "role": "admin"
-        }
+        return {"user": currentuser, "role": "admin"}
+

@@ -14,6 +14,7 @@ from app.models.user import User, UserRole, Base
 from app.models.employer import Employer
 from app.models.job_seeker import JobSeeker
 from app.models.job import Job, JobType, WorkMode, ExperienceLevel
+from app.models.password_reset import PasswordResetToken 
 
 # Try importing Resume (if it exists)
 try:
@@ -63,7 +64,7 @@ def seed_database():
         )
         db.add(admin_user)
         db.commit()
-        print(f"✅ Admin created: admin@jobscape.com / admin123")
+        print(f"✅ Admin created: ayeshamashiat01@gmail.com / admin123")
         
         # ===== CREATE TEST EMPLOYERS =====
         print("\n🏢 Creating test employers...")

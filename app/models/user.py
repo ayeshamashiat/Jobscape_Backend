@@ -18,6 +18,8 @@ class UserRole(str, enum.Enum):
     EMPLOYER = "EMPLOYER"
     ADMIN = "ADMIN"
 
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -66,3 +68,5 @@ class User(Base):
         uselist=False,
         cascade="all, delete-orphan"
     )
+    
+    password_resets = relationship("PasswordResetToken", back_populates="user", cascade="all, delete-orphan")

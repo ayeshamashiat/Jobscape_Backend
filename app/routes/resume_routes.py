@@ -4,7 +4,7 @@ from app.database import get_db
 from app.models.resume import Resume, ResumeParseStatus
 from app.models.job_seeker import JobSeeker
 from app.models.user import User, UserRole
-from app.utils.security import get_current_user
+from app.utils.security import get_current_user, get_current_user_or_cv_upload_user
 from app.utils.file_validators import validate_resume_file  # ✅ Import from your existing util
 from app.utils.text_extractor import extract_text_from_resume
 from app.utils.cv_parser_ai import structure_resume_with_ai
@@ -26,9 +26,9 @@ async def upload_resume(
     Upload CV to auto-populate job seeker profile
     
     New Flow (matches employer registration):
-    1. User registers → Email sent immediately
+    1. User registers → Email sent immediately → JobSeeker profile created with fullname
     2. User verifies email → Can login
-    3. User uploads CV (this endpoint) → Profile auto-populated
+    3. User uploads CV (this endpoint) → Profile UPDATED with parsed data
     4. User can browse/apply to jobs
     
     Requirements:
@@ -48,10 +48,35 @@ async def upload_resume(
             headers={"X-Next-Step": "email_verification"}
         )
     
-    # Get job seeker profile
+    # ✅ Get job seeker profile (should ALWAYS exist now - created during registration)
     job_seeker = db.query(JobSeeker).filter(JobSeeker.user_id == current_user.id).first()
     if not job_seeker:
-        raise HTTPException(status_code=404, detail="Job seeker profile not found")
+        # This should NEVER happen now (because we create profile during registration)
+        # But if it does, create it as a fallback
+        job_seeker = JobSeeker(
+            user_id=current_user.id,
+            full_name=current_user.email.split('@')[0],  # Fallback to email prefix
+            profile_completed=False
+        )
+        db.add(job_seeker)
+        db.commit()
+        db.refresh(job_seeker)
+    
+    # ✅ Check if user already uploaded CV and profile is completed
+    if job_seeker.profile_completed:
+        existing_resume = db.query(Resume).filter(
+            Resume.job_seeker_id == job_seeker.id,
+            Resume.is_primary == True
+        ).first()
+        
+        if existing_resume:
+            return {
+                "message": "You've already uploaded a CV and your profile is complete. Use the update endpoint to replace it.",
+                "resume_id": str(existing_resume.id),
+                "profile_completed": True,
+                "next_step": "browse_jobs",
+                "suggestion": "Visit /jobs to start applying"
+            }
     
     # ✅ Validate file using your existing validator
     try:
@@ -62,7 +87,7 @@ async def upload_resume(
     cloudinary_public_id = None
     
     try:
-        # Mark previous resumes as not primary
+        # Mark previous resumes as not primary (if any exist)
         db.query(Resume).filter(Resume.job_seeker_id == job_seeker.id).update({"is_primary": False})
         db.commit()
         
@@ -100,8 +125,14 @@ async def upload_resume(
             # Parse with AI
             parsed_data = structure_resume_with_ai(resume_text)
             
-            # ✅ Update job seeker profile with parsed data
+            # ✅ UPDATE job seeker profile with parsed data (don't override fullname from registration)
             if parsed_data:
+                # Keep the fullname from registration if parsing didn't find a better one
+                if parsed_data.get("full_name") and parsed_data["full_name"] != job_seeker.full_name:
+                    # Only update if parsed name looks more complete
+                    if len(parsed_data["full_name"].split()) > len(job_seeker.full_name.split()):
+                        job_seeker.full_name = parsed_data["full_name"]
+                
                 # Update only if data exists (don't override with None)
                 if parsed_data.get("phone"):
                     job_seeker.phone = parsed_data["phone"]
@@ -130,8 +161,15 @@ async def upload_resume(
                 if parsed_data.get("portfolio"):
                     job_seeker.portfolio_url = parsed_data["portfolio"]
                 
-                # Mark profile as completed
-                job_seeker.profile_completed = True
+                # ✅ Check if profile has enough info to be considered "complete"
+                required_fields_filled = all([
+                    job_seeker.full_name,
+                    job_seeker.phone or job_seeker.location,  # At least one contact info
+                    job_seeker.skills and len(job_seeker.skills) > 0,
+                ])
+                
+                # Mark profile as completed if parsing was successful and required fields exist
+                job_seeker.profile_completed = required_fields_filled
                 parsing_successful = True
             
             # Update resume with parsed data
@@ -148,6 +186,7 @@ async def upload_resume(
             parsing_error = str(e)
             
             resume.parse_status = ResumeParseStatus.FAILED
+            # Don't set profile_completed to False - keep it as is
             db.commit()
         
         # ✅ Return success response (regardless of parsing outcome)
@@ -156,13 +195,17 @@ async def upload_resume(
                 "message": "CV uploaded and parsed successfully! Your profile has been auto-populated.",
                 "resume_id": str(resume.id),
                 "parse_status": "SUCCESS",
-                "profile_completed": True,
+                "profile_completed": job_seeker.profile_completed,
                 "extracted_data": {
+                    "full_name": job_seeker.full_name,
+                    "phone": job_seeker.phone,
+                    "location": job_seeker.location,
                     "skills": (resume.parsed_data or {}).get("skills", [])[:5],  # Preview top 5
                     "experience_count": len((resume.parsed_data or {}).get("experience", [])),
                     "education_count": len((resume.parsed_data or {}).get("education", []))
                 },
-                "next_step": "browse_jobs"
+                "next_step": "browse_jobs" if job_seeker.profile_completed else "complete_profile",
+                "instructions": "Your profile is ready! You can now browse and apply to jobs." if job_seeker.profile_completed else "Some fields are missing. You can complete your profile or start browsing jobs."
             }
         else:
             return {
@@ -173,7 +216,8 @@ async def upload_resume(
                 "next_step": "manual_profile_completion",
                 "error": parsing_error,
                 "can_retry": True,
-                "instructions": "You can still browse and apply to jobs. Consider uploading a different CV format or complete your profile manually."
+                "instructions": "You can still browse and apply to jobs. Consider uploading a different CV format or complete your profile manually.",
+                "retry_endpoint": f"/resume/{resume.id}/retry-parse"
             }
     
     except HTTPException:
@@ -189,14 +233,13 @@ async def upload_resume(
         
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
-
 # ===================== UPDATE/REPLACE CV =====================
 
 @router.put("/update")
 async def update_resume(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_or_cv_upload_user)
 ):
     """
     Replace existing CV with new one

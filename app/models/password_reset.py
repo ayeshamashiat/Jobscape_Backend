@@ -3,7 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import String, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -38,3 +38,5 @@ class PasswordResetToken(Base):
         default=datetime.utcnow,
         nullable=False
     )
+
+    user = relationship("User", back_populates="password_resets")
