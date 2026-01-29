@@ -14,39 +14,31 @@ logger = logging.getLogger(__name__)
 
 def create_email_verification_token(db: Session, user: User) -> str:
     """Generate email verification token (expires in 24 hours)"""
+    
+    # FORCE new token creation if user is being re-verified
+    # Don't reuse old tokens - they cause issues with deleted/recreated users
+    if user.email_verification_token and user.email_verification_expiry:
+        if user.email_verification_expiry > datetime.now(timezone.utc):
+            print(f"♻️ Reusing valid token for {user.email}")
+            return user.email_verification_token
+        else:
+            print(f"🗑️ Old token expired, creating new one for {user.email}")
+    
+    # Generate fresh token
     token = secrets.token_urlsafe(32)
     user.email_verification_token = token
     user.email_verification_expiry = datetime.now(timezone.utc) + timedelta(hours=24)
     
-    print(f"\n{'='*50}")
-    print(f"DEBUG: CREATING TOKEN")
+    print("="*50)
+    print("DEBUG: CREATING NEW TOKEN")
     print(f"User: {user.email}")
     print(f"Token: {token}")
     print(f"Expiry: {user.email_verification_expiry}")
-    print(f"{'='*50}\n")
+    print("="*50)
     
     db.commit()
     db.refresh(user)
-    
-    # ✅ ADD THIS: Verify it's actually in the database
-    verification_check = db.query(User).filter(
-        User.id == user.id
-    ).first()
-    
-    print(f"\n{'='*50}")
-    print(f"VERIFICATION CHECK:")
-    print(f"Token in DB: {verification_check.email_verification_token}")
-    print(f"Expiry in DB: {verification_check.email_verification_expiry}")
-    print(f"Match: {verification_check.email_verification_token == token}")
-    print(f"{'='*50}\n")
-    
-    if verification_check.email_verification_token != token:
-        print("⚠️ WARNING: Token not saved to database!")
-    
     return token
-
-
-
 
 def verify_email(db: Session, token: str) -> User:
     """Verify email using token"""
