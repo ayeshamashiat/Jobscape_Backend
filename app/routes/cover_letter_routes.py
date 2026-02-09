@@ -13,7 +13,9 @@ from app.schema.cover_letter_schema import (
     CoverLetterUpdate
 )
 import uuid
-
+from app.utils.ai_cover_letter_generator import generate_cover_letter, CoverLetterGeneratorError
+from app.models.job import Job
+from datetime import datetime, timezone, timedelta
 
 router = APIRouter(prefix="/jobseeker/cover-letters", tags=["cover-letters"])
 
@@ -63,7 +65,7 @@ def get_my_cover_letters(
     """Get all cover letters for the authenticated job seeker"""
     
     # Verify user is a job seeker
-    if current_user.role != UserRole.JOBSEEKER:
+    if current_user.role != UserRole.JOB_SEEKER:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only job seekers can view cover letters"
@@ -216,3 +218,89 @@ def delete_cover_letter(
     db.commit()
     
     return None
+
+@router.post("/generate", status_code=status.HTTP_200_OK)
+def generate_ai_cover_letter(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate AI cover letter for a specific job
+    
+    Uses job details + user profile to create personalized cover letter
+    Does NOT save automatically - user can choose to save after review
+    """
+    
+    if current_user.role != UserRole.JOB_SEEKER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only job seekers can generate cover letters"
+        )
+    
+    # Get job seeker profile
+    job_seeker = db.query(JobSeeker).filter(JobSeeker.user_id == current_user.id).first()
+    if not job_seeker:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job seeker profile not found"
+        )
+    
+    # Get job details
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    # Build user profile dict
+    user_profile = {
+        "full_name": job_seeker.full_name,
+        "skills": job_seeker.skills or [],
+        "experience": job_seeker.experience or [],
+        "education": job_seeker.education or [],
+        "professional_summary": job_seeker.professional_summary,
+        "location": job_seeker.location
+    }
+    
+    # Check if profile has minimum data
+    if not user_profile["full_name"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Please complete your profile (at least name and skills) before generating cover letters"
+        )
+    
+    try:
+        # Generate cover letter using AI utility
+        cover_letter_text = generate_cover_letter(
+            job_title=job.title,
+            company_name=None,  # We don't expose company name in public job listings
+            job_location=job.location,
+            required_skills=job.required_skills or [],
+            experience_level=job.experience_level,
+            job_type=job.job_type,
+            work_mode=job.work_mode,
+            user_profile=user_profile,
+            provider="groq"  # Can make this configurable
+        )
+        
+        return {
+            "cover_letter": cover_letter_text,
+            "job_title": job.title,
+            "generated_at": datetime.now().isoformat(),
+            "word_count": len(cover_letter_text.split()),
+            "char_count": len(cover_letter_text),
+            "message": "Cover letter generated successfully. Review and edit before using."
+        }
+    
+    except CoverLetterGeneratorError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate cover letter: {str(e)}"
+        )

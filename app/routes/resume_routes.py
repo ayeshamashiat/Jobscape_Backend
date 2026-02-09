@@ -465,3 +465,36 @@ def delete_resume(
     db.commit()
     
     return {"message": "Resume deleted successfully"}
+
+@router.get("/my-resumes")
+def get_my_resumes_list(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all resumes for job application selection - lightweight version"""
+    
+    if current_user.role != UserRole.JOB_SEEKER:
+        raise HTTPException(status_code=403, detail="Only job seekers can view resumes")
+    
+    job_seeker = db.query(JobSeeker).filter(JobSeeker.user_id == current_user.id).first()
+    if not job_seeker:
+        raise HTTPException(status_code=404, detail="Job seeker profile not found")
+    
+    resumes = db.query(Resume).filter(
+        Resume.job_seeker_id == job_seeker.id,
+        Resume.parse_status != ResumeParseStatus.FAILED  # Only show successfully parsed/pending
+    ).order_by(Resume.is_primary.desc(), Resume.uploaded_at.desc()).all()
+    
+    return {
+        "resumes": [
+            {
+                "id": str(r.id),
+                "filename": f"{r.cloudinary_public_id.split('/')[-1]}.pdf" if r.cloudinary_public_id else "Resume.pdf",
+                "is_primary": r.is_primary,
+                "uploaded_at": r.uploaded_at.isoformat(),
+                "file_url": r.file_url
+            }
+            for r in resumes
+        ],
+        "total": len(resumes)
+    }
