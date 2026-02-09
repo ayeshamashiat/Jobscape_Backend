@@ -29,7 +29,7 @@ def create_cover_letter(
     """Create a new cover letter for the authenticated job seeker"""
     
     # Verify user is a job seeker
-    if current_user.role != UserRole.JOBSEEKER:
+    if current_user.role != UserRole.JOB_SEEKER:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only job seekers can create cover letters"
