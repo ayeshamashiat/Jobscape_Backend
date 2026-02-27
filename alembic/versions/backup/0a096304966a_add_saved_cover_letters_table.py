@@ -46,5 +46,5 @@ def downgrade() -> None:
                comment=None,
                existing_comment='False only if account is suspended by admin, not during registration',
                existing_nullable=False)
-    op.drop_table('saved_cover_letters')
+    # op.drop_table('saved_cover_letters')
     # ### end Alembic commands ###

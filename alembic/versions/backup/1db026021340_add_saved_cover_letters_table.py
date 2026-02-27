@@ -33,4 +33,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_table('saved_cover_letters')
+    # op.drop_table('saved_cover_letters')
