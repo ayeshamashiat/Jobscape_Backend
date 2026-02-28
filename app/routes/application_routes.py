@@ -277,3 +277,59 @@ def get_job_application_stats(
     
     stats = application_crud.get_application_stats(db, job_id)
     return stats
+
+
+
+@router.get("/{application_id}/details")
+def get_job_application_details(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get full application details including job seeker profile and resume
+    (Employer only)
+    """
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can access this")
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    
+    details = application_crud.get_application_full_details(
+        db=db,
+        application_id=application_id,
+        employer_id=employer.id
+    )
+    
+    if not details:
+        raise HTTPException(status_code=404, detail="Application not found or unauthorized")
+    
+    return details
+
+
+@router.get("/{application_id}/resume")
+def get_application_resume(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get resume details for an application (employer only)"""
+    
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can access this")
+    
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    
+    resume_data = application_crud.get_application_resume(
+        db=db,
+        application_id=application_id,
+        employer_id=employer.id
+    )
+    
+    if not resume_data:
+        raise HTTPException(
+            status_code=404, 
+            detail="Resume not found or no access"
+        )
+    
+    return resume_data
