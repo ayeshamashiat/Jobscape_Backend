@@ -250,3 +250,115 @@ def get_application_stats(db: Session, job_id: uuid.UUID) -> dict:
         "accepted": accepted,
         "rejected": rejected
     }
+
+
+def get_application_with_details(
+    db: Session,
+    application_id: uuid.UUID,
+    employer_id: uuid.UUID
+) -> Optional[Application]:
+    """
+    Get application with full details including resume (for employer)
+    Verifies employer owns the job this application is for
+    """
+    from app.models.job import Job
+    
+    application = db.query(Application).filter(
+        Application.id == application_id
+    ).first()
+    
+    if not application:
+        return None
+    
+    # Verify employer owns the job
+    job = db.query(Job).filter(Job.id == application.job_id).first()
+    if not job or job.employer_id != employer_id:
+        return None
+    
+    return application
+
+
+def get_application_resume(
+    db: Session,
+    application_id: uuid.UUID,
+    employer_id: uuid.UUID
+) -> Optional[dict]:
+    """
+    Get resume details for an application
+    Returns None if application not found or employer doesn't own the job
+    """
+    application = get_application_with_details(db, application_id, employer_id)
+    
+    if not application or not application.resume_id:
+        return None
+    
+    from app.models.resume import Resume
+    resume = db.query(Resume).filter(Resume.id == application.resume_id).first()
+    
+    if not resume:
+        return None
+    
+    return {
+        "id": str(resume.id),
+        "file_url": resume.file_url,
+        "file_name": resume.file_name,
+        "uploaded_at": resume.uploaded_at
+    }
+
+
+def get_application_full_details(
+    db: Session,
+    application_id: uuid.UUID,
+    employer_id: uuid.UUID
+) -> Optional[dict]:
+    """
+    Get complete application details including job seeker info and resume
+    """
+    application = get_application_with_details(db, application_id, employer_id)
+    
+    if not application:
+        return None
+    
+    from app.models.job_seeker import JobSeeker
+    from app.models.user import User
+    from app.models.resume import Resume
+    
+    # Get job seeker
+    job_seeker = db.query(JobSeeker).filter(
+        JobSeeker.id == application.job_seeker_id
+    ).first()
+    
+    if not job_seeker:
+        return None
+    
+    # Get user
+    user = db.query(User).filter(User.id == job_seeker.user_id).first()
+    
+    # Get resume
+    resume = None
+    if application.resume_id:
+        resume = db.query(Resume).filter(Resume.id == application.resume_id).first()
+    
+    return {
+        "application": application,
+        "job_seeker": {
+            "id": str(job_seeker.id),
+            "full_name": job_seeker.full_name,
+            "email": user.email if user else None,
+            "phone": job_seeker.phone,
+            "location": job_seeker.location,
+            "summary": job_seeker.professional_summary,
+            "skills": job_seeker.skills,
+            "experience": job_seeker.experience,
+            "education": job_seeker.education,
+            "certifications": job_seeker.certifications,
+            "languages": job_seeker.languages,
+            "portfolio_links": job_seeker.portfolio_url,
+        },
+        "resume": {
+            "id": str(resume.id),
+            "file_url": resume.file_url,
+            "uploaded_at": resume.uploaded_at,
+            "parsed_data": resume.parsed_data
+        } if resume else None
+    }

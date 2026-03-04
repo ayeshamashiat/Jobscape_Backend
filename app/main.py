@@ -15,6 +15,8 @@ from app.routes.subscription_routes import router as subscription_router
 from app.tasks.job_closure import close_expired_jobs
 from app.routes.application_routes import router as application_router
 from app.routes.profile_routes import router as profile_picture_router
+from app.routes.cover_letter_routes import router as cover_letter_router
+from app.routes.commute_routes import router as commute_router
 
 
 # Create tables
@@ -164,3 +166,5 @@ app.include_router(oauth_routes.router)
 app.include_router(subscription_router)
 app.include_router(application_router)
 app.include_router(profile_picture_router)
+app.include_router(cover_letter_router)
+app.include_router(commute_router)
