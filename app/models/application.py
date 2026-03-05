@@ -1,11 +1,14 @@
 # app/models/application.py
+from typing import Optional
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Boolean, ForeignKey, DateTime, func, Text, Enum as SQLEnum
+from sqlalchemy import Integer, String, Boolean, ForeignKey, DateTime, func, Text, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 import enum
+from sqlalchemy.dialects.postgresql import JSONB
+
 
 
 class ApplicationStatus(str, enum.Enum):
@@ -116,6 +119,11 @@ class Application(Base):
         server_default=func.now(),
         onupdate=func.now()
     )
+    # Ats score
+    ats_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0–100
+    ats_report: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)  # detailed breakdown
+
+
 
     # Relationships
     job = relationship("Job", back_populates="applications")

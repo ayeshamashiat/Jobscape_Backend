@@ -16,6 +16,8 @@ from app.schema.application_schema import (
 from app.crud import application_crud, employer_crud
 import uuid
 
+from app.crud.application_crud import score_application_ats, bulk_score_job_applications
+
 router = APIRouter(prefix="/applications", tags=["applications"])
 
 
@@ -333,3 +335,85 @@ def get_application_resume(
         )
     
     return resume_data
+
+@router.post("/job/{job_id}/bulk-ats-score")
+def bulk_ats_score(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Trigger ATS scoring for ALL applications of a job."""
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can trigger ATS scoring")
+
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    try:
+        result = bulk_score_job_applications(db, job_id, employer.id)
+        return {"message": "Bulk ATS scoring complete", **result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{application_id}/ats-score")
+async def score_single_application(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """ATS score a single application."""
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can trigger ATS scoring")
+
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    try:
+        application = await score_application_ats(db, application_id, employer.id)
+        return {
+            "application_id": str(application.id),
+            "ats_score": application.ats_score,
+            "ats_report": application.ats_report,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/job/{job_id}/ats-ranked")
+def get_ats_ranked_applications(
+    job_id: uuid.UUID,
+    min_score: int = Query(0, ge=0, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all applications for a job ranked by ATS score."""
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can access this")
+
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    from app.models.job import Job
+    job = db.query(Job).filter(Job.id == job_id, Job.employer_id == employer.id).first()
+    if not job:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    from app.models.jobseeker import JobSeeker
+    applications = (
+        db.query(Application)
+        .filter(
+            Application.job_id == job_id,
+            Application.ats_score >= min_score
+        )
+        .order_by(Application.ats_score.desc())
+        .all()
+    )
+
+    result = []
+    for app in applications:
+        js = db.query(JobSeeker).filter(JobSeeker.id == app.job_seeker_id).first()
+        result.append({
+            "application_id": str(app.id),
+            "applicant_name": js.full_name if js else None,
+            "ats_score": app.ats_score,
+            "match_score": app.match_score,
+            "recommendation": app.ats_report.get("recommendation") if app.ats_report else None,
+            "status": app.status,
+        })
+
+    return {"job_id": str(job_id), "total": len(result), "applications": result}

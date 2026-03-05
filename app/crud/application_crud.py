@@ -8,6 +8,8 @@ from app.models.employer import Employer
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
+from app.utils.ats_scorer import score_resume_against_job
+from app.models.resume import Resume
 
 
 def calculate_match_score(job: Job, job_seeker: JobSeeker) -> tuple[int, dict]:
@@ -361,4 +363,77 @@ def get_application_full_details(
             "uploaded_at": resume.uploaded_at,
             "parsed_data": resume.parsed_data
         } if resume else None
+    }
+
+async def score_application_ats(
+    db: Session, application_id: uuid.UUID, employer_id: uuid.UUID
+) -> Application:
+    """Score a single application using AI ATS."""
+    application = get_application_with_details(db, application_id, employer_id)
+    if not application:
+        raise ValueError("Application not found or unauthorized")
+
+    job = db.query(Job).filter(Job.id == application.job_id).first()
+    if not job:
+        raise ValueError("Job not found")
+
+    resume = db.query(Resume).filter(Resume.id == application.resume_id).first()
+    if not resume or not resume.parsed_data:
+        raise ValueError("Resume not parsed yet. Cannot score.")
+
+    ats_result = score_resume_against_job(
+        resume_parsed_data=resume.parsed_data,
+        job_title=job.title,
+        job_description=job.description,
+        required_skills=job.required_skills or [],
+        preferred_skills=job.preferred_skills or [],
+        experience_level=job.experience_level,
+    )
+
+    application.ats_score = ats_result.get("overall_score", 0)
+    application.ats_report = ats_result
+    db.commit()
+    db.refresh(application)
+    return application
+
+
+def bulk_score_job_applications(
+    db: Session, job_id: uuid.UUID, employer_id: uuid.UUID
+) -> dict:
+    """Score ALL applications for a job in bulk."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job or job.employer_id != employer_id:
+        raise ValueError("Job not found or unauthorized")
+
+    applications = db.query(Application).filter(Application.job_id == job_id).all()
+
+    scored, failed, skipped = 0, 0, 0
+    for app in applications:
+        try:
+            resume = db.query(Resume).filter(Resume.id == app.resume_id).first()
+            if not resume or not resume.parsed_data:
+                skipped += 1
+                continue
+
+            ats_result = score_resume_against_job(
+                resume_parsed_data=resume.parsed_data,
+                job_title=job.title,
+                job_description=job.description,
+                required_skills=job.required_skills or [],
+                preferred_skills=job.preferred_skills or [],
+                experience_level=job.experience_level,
+            )
+            app.ats_score = ats_result.get("overall_score", 0)
+            app.ats_report = ats_result
+            scored += 1
+        except Exception as e:
+            failed += 1
+            print(f"Failed to score application {app.id}: {e}")
+
+    db.commit()
+    return {
+        "total": len(applications),
+        "scored": scored,
+        "failed": failed,
+        "skipped_no_resume": skipped,
     }
