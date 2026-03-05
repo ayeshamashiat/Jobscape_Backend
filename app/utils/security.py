@@ -9,6 +9,8 @@ import os
 from dotenv import load_dotenv
 from app.models.user import User
 import uuid
+from fastapi import Header
+from typing import Optional
 
 load_dotenv()
 
@@ -78,43 +80,46 @@ from app.database import get_db
 
 
 def get_current_user(
-    token: Optional[str] = Depends(oauth2_scheme),  # ✅ Make Optional since auto_error=False
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ) -> User:
-    """
-    Fetch the current authenticated user from JWT token.
-    This is automatically picked up by Swagger UI for the Authorize button.
-    """
-    if not token:
+
+    if not authorization:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"}
+            status_code=401,
+            detail="Authorization header missing"
         )
-    
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authorization header"
+        )
+
+    token = authorization.split(" ")[1]
+
     user_id_str = decode_access_token(token)
 
     try:
         user_id = uuid.UUID(user_id_str)
     except ValueError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user ID format",
-            headers={"WWW-Authenticate": "Bearer"}
+            status_code=401,
+            detail="Invalid user ID format"
         )
 
     user = db.query(User).filter(User.id == user_id).first()
+
     if not user:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"}
+            status_code=401,
+            detail="User not found"
         )
 
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account has been suspended"
+            status_code=403,
+            detail="Account suspended"
         )
 
     return user
