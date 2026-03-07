@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, validator
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
 
@@ -17,7 +17,7 @@ class EmployerRegistrationCreate(BaseModel):
     company_website: Optional[str] = None
     industry: str = Field(..., min_length=1, max_length=100)
     location: str = Field(..., min_length=1, max_length=200)
-    company_size: Optional[str] = Field(None, pattern="^(1-10|11-50|51-200|201-500|500\+)$")
+    company_size: Optional[str] = Field(None, pattern="^(1-10|11-50|51-200|201-500|500\\+)$")
     description: Optional[str] = Field(None, max_length=1000)
 
     # Company type
@@ -65,7 +65,7 @@ class EmployerProfileResponse(BaseModel):
     full_name: str
     job_title: Optional[str]
     work_email: str
-    work_email_verified: bool  # NEW
+    work_email_verified: bool
 
     # Company
     company_name: str
@@ -96,7 +96,7 @@ class VerificationApprovalRequest(BaseModel):
     admin_notes: str = Field(..., min_length=10, max_length=1000)
 
 
-# ===== NEW: Work Email Verification Schemas =====
+# ===== Work Email Verification Schemas =====
 
 class WorkEmailVerificationConfirm(BaseModel):
     """Confirm work email with 6-digit code"""
@@ -132,3 +132,44 @@ class JobApplicationSummary(BaseModel):
     shortlisted: int
     rejected: int
     pending_review: int
+
+
+# ===== NEW: Feature 1 — Employer Public Profile Schemas =====
+
+class EmployerPublicBasic(BaseModel):
+    id: UUID
+    full_name: str
+    job_title: Optional[str] = None
+    company_name: str
+    logo_url: Optional[str] = None
+    industry: Optional[str] = None
+    company_size: Optional[str] = None
+    location: Optional[str] = None
+    description: Optional[str] = None
+    company_website: Optional[str] = None
+    verification_tier: str
+    trust_score: int
+    total_job_posts_count: int
+    founded_year: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class EmployeeOnPlatform(BaseModel):
+    id: UUID
+    full_name: str
+    profile_picture_url: Optional[str] = None
+    primary_industry: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EmployerPublicResponse(BaseModel):
+    employer: EmployerPublicBasic
+    active_jobs: list  # List[JobResponse] — imported at route level to avoid circular
+    employees_on_platform: List[EmployeeOnPlatform]
+    total_jobs_posted: int
+    response_rate: Optional[int] = None  # Feature 5.3: Employer response rate

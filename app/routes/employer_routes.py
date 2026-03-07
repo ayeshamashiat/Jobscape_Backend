@@ -1,14 +1,19 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, Text
 from datetime import datetime, timezone, timedelta
 from app.database import get_db
+from app.models.job_seeker import JobSeeker
+from sqlalchemy import func
 from app.schema.employer_schema import (
     EmployerRegistrationCreate,
     EmployerProfileUpdate,
     EmployerProfileResponse,
     WorkEmailVerificationConfirm,
-    WorkEmailVerificationStatusResponse
+    WorkEmailVerificationStatusResponse,
+    EmployerPublicResponse
 )
 from app.schema.job_schema import (
     JobCreate,
@@ -994,3 +999,68 @@ def get_job_stats(
         rejected_applications=rejected_apps,
         acceptance_rate=acceptance_rate
     )
+
+@router.get("/public/{employer_id}")
+def get_employer_public_profile(
+    employer_id: uuid.UUID,
+    db: Session = Depends(get_db)
+):
+    """
+    Public employer profile — accessible to anyone (auth optional).
+    Returns company info, active jobs, and platform employees.
+    """
+    from sqlalchemy import Text
+    from app.models.job_seeker import JobSeeker
+    from app.schema.employer_schema import EmployerPublicBasic, EmployeeOnPlatform
+
+    employer = db.query(Employer).filter(Employer.id == employer_id).first()
+    if not employer:
+        raise HTTPException(status_code=404, detail='Employer not found')
+
+    # Active, open jobs
+    jobs = (
+        db.query(Job)
+        .filter(
+            Job.employer_id == employer_id,
+            Job.is_active == True,
+            Job.is_closed == False
+        )
+        .order_by(Job.created_at.desc())
+        .all()
+    )
+
+    # Job seekers on the platform that list this company in their experience
+    company_employees = (
+        db.query(JobSeeker)
+        .filter(
+            JobSeeker.experience.cast(Text).ilike(f'%{employer.company_name}%')
+        )
+        .limit(12)
+        .all()
+    )
+
+    # Feature 5.3 — Employer response rate
+    total_apps = (
+        db.query(func.count(Application.id))
+        .join(Job, Application.job_id == Job.id)
+        .filter(Job.employer_id == employer_id)
+        .scalar()
+    )
+    responded = (
+        db.query(func.count(Application.id))
+        .join(Job, Application.job_id == Job.id)
+        .filter(
+            Job.employer_id == employer_id,
+            Application.status != 'pending'
+        )
+        .scalar()
+    )
+    response_rate = int((responded / total_apps) * 100) if total_apps and total_apps > 0 else None
+
+    return {
+        'employer': EmployerPublicBasic.from_orm(employer),
+        'active_jobs': jobs,
+        'employees_on_platform': [EmployeeOnPlatform.from_orm(e) for e in company_employees],
+        'total_jobs_posted': employer.total_job_posts_count,
+        'response_rate': response_rate,
+    }

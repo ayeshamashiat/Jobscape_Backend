@@ -2,7 +2,7 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional
+from typing import Optional, List
 
 
 def send_email(to_email: str, subject: str, html_body: str, text_body: str):
@@ -13,21 +13,17 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: str):
         msg['From'] = os.getenv('SMTP_EMAIL')
         msg['To'] = to_email
 
-        # Attach both plain text and HTML versions
         part1 = MIMEText(text_body, 'plain')
         part2 = MIMEText(html_body, 'html')
-
         msg.attach(part1)
         msg.attach(part2)
 
-        # Send email
         with smtplib.SMTP(os.getenv('EMAIL_HOST'), int(os.getenv('EMAIL_PORT'))) as server:
             server.starttls()
             server.login(os.getenv('SMTP_EMAIL'), os.getenv('SMTP_PASSWORD'))
             server.send_message(msg)
 
         print(f"✅ Email sent to {to_email}")
-
     except Exception as e:
         print(f"❌ Email send failed: {e}")
         raise
@@ -37,9 +33,7 @@ def send_verification_email(to_email: str, token: str):
     """Send account email verification link"""
     frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
     verify_url = f"{frontend_url}/verify-email/confirm?token={token}"
-
     subject = "Verify your Jobscape account"
-
     html_body = f"""
     <html>
         <body style="font-family: Arial, sans-serif;">
@@ -53,73 +47,30 @@ def send_verification_email(to_email: str, token: str):
         </body>
     </html>
     """
-
-    text_body = f"""
-    Welcome to Jobscape!
-
-    Please verify your email address by visiting: {verify_url}
-
-    This link expires in 24 hours.
-    """
-
+    text_body = f"Welcome to Jobscape!\n\nVerify your email: {verify_url}\n\nThis link expires in 24 hours."
     send_email(to_email, subject, html_body, text_body)
 
 
-# ===== NEW: Work Email Verification =====
-
 def send_work_email_verification(to_email: str, code: str, company_name: str):
-    """
-    Send 6-digit verification code to work email
-    """
+    """Send 6-digit verification code to work email"""
     subject = f"Verify your work email - {code}"
-
     html_body = f"""
     <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
             <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
                 <h2 style="color: #2563eb;">Verify Your Work Email</h2>
-
                 <p>Hi {company_name},</p>
-
-                <p>Thank you for registering on <strong>Jobscape</strong>!</p>
-
-                <p>To complete your registration and verify your company email, please use the verification code below:</p>
-
+                <p>Your Jobscape work email verification code:</p>
                 <div style="background-color: #f0f0f0; padding: 20px; text-align: center; border-radius: 5px; margin: 20px 0;">
                     <h1 style="font-size: 36px; letter-spacing: 8px; margin: 0; color: #2563eb; font-family: 'Courier New', monospace;">{code}</h1>
                 </div>
-
                 <p><strong>This code expires in 15 minutes.</strong></p>
-
-                <p>If you didn't request this verification, please ignore this email.</p>
-
-                <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-
-                <p style="color: #666; font-size: 12px;">
-                    This email was sent to {to_email} because you registered a company account on Jobscape.
-                </p>
+                <p>If you didn't request this, please ignore this email.</p>
             </div>
         </body>
     </html>
     """
-
-    text_body = f"""
-    Verify Your Work Email
-
-    Hi {company_name},
-
-    Thank you for registering on Jobscape!
-
-    Your verification code is: {code}
-
-    This code expires in 15 minutes.
-
-    If you didn't request this verification, please ignore this email.
-
-    ---
-    This email was sent to {to_email}
-    """
-
+    text_body = f"Hi {company_name},\n\nYour verification code: {code}\n\nExpires in 15 minutes."
     send_email(to_email, subject, html_body, text_body)
 
 
@@ -127,32 +78,77 @@ def send_password_reset_email(to_email: str, token: str):
     """Send password reset link"""
     frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
     reset_url = f"{frontend_url}/reset-password?token={token}"
-
     subject = "Reset your Jobscape password"
-
     html_body = f"""
     <html>
         <body style="font-family: Arial, sans-serif;">
             <h2>Password Reset Request</h2>
-            <p>Click the button below to reset your password:</p>
             <a href="{reset_url}" style="display: inline-block; padding: 10px 20px; background-color: #2563eb; color: white; text-decoration: none; border-radius: 5px;">
                 Reset Password
             </a>
             <p>Or copy this link: {reset_url}</p>
-            <p>This link expires in 1 hour.</p>
-            <p>If you didn't request this, please ignore this email.</p>
+            <p>This link expires in 1 hour. If you didn't request this, please ignore this email.</p>
         </body>
     </html>
     """
-
-    text_body = f"""
-    Password Reset Request
-
-    Click this link to reset your password: {reset_url}
-
-    This link expires in 1 hour.
-
-    If you didn't request this, please ignore this email.
-    """
-
+    text_body = f"Reset your password: {reset_url}\n\nExpires in 1 hour."
     send_email(to_email, subject, html_body, text_body)
+
+
+# ===== NEW: Feature 4.3 — Selection Round Email =====
+
+def _send_selection_email(seeker_email: str, seeker_name: str, job, rounds: List[dict], instructions: Optional[str]):
+    """Send selection process details to a shortlisted applicant."""
+    rounds_html = ''
+    for r in rounds:
+        mode = 'Online' if r.get('is_online') else 'In-Person'
+        loc = r.get('location_or_link', '')
+        duration = f"{r.get('duration_minutes', '?')} min" if r.get('duration_minutes') else ''
+
+        rounds_html += f"""
+        <div style="border:1px solid #e5e7eb; border-radius:8px; padding:12px; margin-bottom:10px;">
+            <strong>Round {r['number']}: {r['title']}</strong>
+            <span style="background:#f5f3ff;color:#7c3aed;padding:2px 8px;border-radius:12px;font-size:12px;margin-left:8px;">
+                {r['type'].title()}
+            </span>
+            {f'<p style="color:#6b7280;margin:4px 0">{r["description"]}</p>' if r.get('description') else ''}
+            <p style="color:#6b7280;font-size:13px;margin:4px 0">
+                {mode} {f'• {duration}' if duration else ''} {f'• {loc}' if loc else ''}
+            </p>
+        </div>"""
+
+    instructions_html = (
+        f"<p><strong>Additional Instructions:</strong> {instructions}</p>"
+        if instructions else ''
+    )
+
+    html_body = f"""
+    <html><body style="font-family:Arial;max-width:600px;margin:0 auto;padding:20px">
+        <div style="background:linear-gradient(135deg,#7c3aed,#6d28d9);padding:24px;border-radius:12px 12px 0 0">
+            <h1 style="color:white;margin:0">📋 Selection Process Details</h1>
+        </div>
+        <div style="border:1px solid #e5e7eb;padding:24px;border-radius:0 0 12px 12px">
+            <p>Hi <strong>{seeker_name}</strong>,</p>
+            <p>Here are the selection process details for
+               <strong>{job.title}</strong> at <strong>{job.employer.company_name}</strong>:</p>
+            {rounds_html}
+            {instructions_html}
+            <p style="color:#6b7280;font-size:13px">Best regards,<br>{job.employer.company_name}</p>
+        </div>
+    </body></html>"""
+
+    text_body = (
+        f"Selection Process for {job.title} at {job.employer.company_name}\n\n"
+        + "\n".join(
+            f"Round {r['number']}: {r['title']} ({r['type']})"
+            for r in rounds
+        )
+        + (f"\n\nInstructions: {instructions}" if instructions else "")
+    )
+
+    send_email(
+        to_email=seeker_email,
+        subject=f"Selection Process — {job.title}",
+        html_body=html_body,
+        text_body=text_body
+    )
