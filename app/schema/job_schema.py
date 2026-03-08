@@ -17,6 +17,8 @@ class JobCreate(BaseModel):
     required_skills: list[str]
     preferred_skills: list[str]
     is_fresh_graduate_friendly: bool = False
+    hiring_policy: Optional[str] = None
+    ats_threshold: int = Field(0, ge=0, le=100)
 
     # Required deadline
     application_deadline: datetime = Field(
@@ -70,6 +72,8 @@ class JobUpdate(BaseModel):
     required_skills: Optional[List[str]] = None
     preferred_skills: Optional[List[str]] = None
     is_fresh_graduate_friendly: Optional[bool] = None
+    hiring_policy: Optional[str] = None
+    ats_threshold: Optional[int] = Field(None, ge=0, le=100)
     is_active: Optional[bool] = None
     application_deadline: Optional[datetime] = None
 
@@ -103,6 +107,8 @@ class JobResponse(BaseModel):
     required_skills: list[str]
     preferred_skills: list[str]
     is_fresh_graduate_friendly: bool
+    hiring_policy: Optional[str] = None
+    ats_threshold: int = 0
     is_active: bool
     is_closed: bool
     application_deadline: datetime

@@ -1,7 +1,7 @@
 # app/routes/selection_routes.py
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from uuid import UUID
 from app.database import get_db
@@ -19,21 +19,24 @@ router = APIRouter(prefix="/selection", tags=["selection"])
 
 
 class RoundSchema(BaseModel):
-    number: int = Field(..., ge=1, le=3)
+    number: int = Field(..., ge=1, le=5)
     type: RoundType
     title: str = Field(..., min_length=2, max_length=100)
     description: Optional[str] = None
     duration_minutes: Optional[int] = Field(None, ge=15, le=480)
     is_online: bool = False
     location_or_link: Optional[str] = None
+    time_limit_minutes: Optional[int] = Field(None, ge=5, le=240)
+    instructions: Optional[str] = None
 
 
 class CreateSelectionProcessRequest(BaseModel):
     job_id: UUID
-    rounds: List[RoundSchema] = Field(..., min_items=1, max_items=3)
+    rounds: List[RoundSchema] = Field(..., min_length=1, max_length=5)
     instructions: Optional[str] = None
 
-    @validator('rounds')
+    @field_validator('rounds')
+    @classmethod
     def rounds_must_be_sequential(cls, v):
         numbers = [r.number for r in v]
         if sorted(numbers) != list(range(1, len(numbers) + 1)):

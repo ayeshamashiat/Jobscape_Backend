@@ -50,6 +50,7 @@ class BroadcastRequest(BaseModel):
     job_id: UUID
     subject: str = Field(..., min_length=3, max_length=200)
     message: str = Field(..., min_length=10, max_length=5000)
+    statuses: List[ApplicationStatus] = Field(default=[ApplicationStatus.SHORTLISTED])
     send_email: bool = True
     send_notification: bool = True
 
@@ -176,9 +177,6 @@ Interview Slot Confirmed
 Log in to JBscape to view full details.
     """.strip()
 
-    return html_body, text_body
-
-
 def _broadcast_email(seeker_name: str, company_name: str, message: str):
     """Build html + text for shortlist broadcast"""
     # Convert newlines to <br> for HTML
@@ -202,7 +200,6 @@ def _broadcast_email(seeker_name: str, company_name: str, message: str):
     </body>
     </html>
     """
-
     text_body = f"""
 Message from {company_name}
 
@@ -213,7 +210,42 @@ Hi {seeker_name},
 Best regards,
 {company_name}
     """.strip()
+    return html_body, text_body
 
+
+def _interview_started_email(seeker_name: str, job_title: str, company_name: str, meeting_link: Optional[str]):
+    """Build html + text for interview started notification"""
+    link_html = f'<div style="margin-top: 24px; text-align: center;"><a href="{meeting_link}" style="background: #10b981; color: white; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: bold;">JOIN INTERVIEW NOW</a></div>' if meeting_link else ""
+    link_text = f"\nJoin Interview: {meeting_link}" if meeting_link else ""
+
+    html_body = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: #10b981; padding: 24px; border-radius: 12px 12px 0 0;">
+            <h1 style="color: white; margin: 0; font-size: 22px;">🚀 Interview Started!</h1>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px; padding: 24px;">
+            <p>Hi <strong>{seeker_name}</strong>,</p>
+            <p>The employer from <strong>{company_name}</strong> has just started the interview for <strong>{job_title}</strong>.</p>
+            <p>Please join as soon as possible.</p>
+            {link_html}
+            <p style="margin-top: 24px; color: #6b7280; font-size: 13px;">
+                Log in to JBscape for more details.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+    text_body = f"""
+Interview Started — {job_title} at {company_name}
+
+Hi {seeker_name},
+
+The employer from {company_name} has just started the interview for {job_title}.
+{link_text}
+
+Log in to JBscape for more details.
+    """.strip()
     return html_body, text_body
 
 
@@ -401,16 +433,36 @@ def get_my_interviews(
     return result
 
 
-# ─── Shortlist Broadcast ──────────────────────────────────────────────────────
+@router.get("/application/{application_id}")
+def get_interview_by_application(
+    application_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get interview schedule for a specific application"""
+    schedule = db.query(InterviewSchedule).filter(InterviewSchedule.application_id == application_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Interview schedule not found")
+        
+    return {
+        "schedule_id": str(schedule.id),
+        "style": schedule.style,
+        "is_confirmed": schedule.is_confirmed,
+        "confirmed_at": schedule.confirmed_at,
+        "meeting_link": schedule.meeting_link
+    }
+
+
+# ─── Targeted Announcements ───────────────────────────────────────────────────
 
 @router.post("/broadcast")
-def broadcast_to_shortlisted(
+def broadcast_to_applicants(
     body: BroadcastRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Employer broadcasts a message to all shortlisted candidates for a job"""
+    """Employer broadcasts a message to applicants in specific stages"""
     from app.models.employer import Employer
     from app.models.job_seeker import JobSeeker
     from app.models.job import Job
@@ -424,16 +476,16 @@ def broadcast_to_shortlisted(
     if not job or job.employer_id != employer.id:
         raise HTTPException(status_code=403, detail="Unauthorized or job not found")
 
-    shortlisted = db.query(Application).filter(
+    target_applicants = db.query(Application).filter(
         Application.job_id == body.job_id,
-        Application.status == ApplicationStatus.SHORTLISTED
+        Application.status.in_(body.statuses)
     ).all()
 
-    if not shortlisted:
-        raise HTTPException(status_code=404, detail="No shortlisted candidates found")
+    if not target_applicants:
+        raise HTTPException(status_code=404, detail="No candidates found in the selected stages")
 
     recipients = 0
-    for app in shortlisted:
+    for app in target_applicants:
         seeker = db.query(JobSeeker).filter(JobSeeker.id == app.job_seeker_id).first()
         seeker_user = db.query(UserModel).filter(UserModel.id == seeker.user_id).first()
 
@@ -450,6 +502,18 @@ def broadcast_to_shortlisted(
                 html_body=html_body,
                 text_body=text_body,
             )
+
+        if seeker_user and body.send_notification:
+            from app.models.notification import Notification, NotificationType
+            new_notif = Notification(
+                user_id=seeker_user.id,
+                title=body.subject,
+                message=body.message,
+                type=NotificationType.BROADCAST,
+                link=f"/job-seeker/jobs/{body.job_id}" # Example link
+            )
+            db.add(new_notif)
+
         recipients += 1
 
     broadcast = ShortlistBroadcast(
@@ -467,5 +531,77 @@ def broadcast_to_shortlisted(
     return {
         "success": True,
         "recipients_count": recipients,
-        "message": f"Message sent to {recipients} shortlisted candidate(s)",
+        "message": f"Message sent to {recipients} candidate(s)",
+    }
+
+
+@router.post("/{schedule_id}/start")
+def start_interview(
+    schedule_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Employer marks a video/phone interview as started — notifies candidate"""
+    from app.models.employer import Employer
+    from app.models.job_seeker import JobSeeker
+    from app.models.job import Job
+    from app.models.user import User as UserModel
+
+    employer = db.query(Employer).filter(Employer.user_id == current_user.id).first()
+    if not employer:
+        raise HTTPException(status_code=403, detail="Employer access required")
+
+    schedule = db.query(InterviewSchedule).filter(InterviewSchedule.id == schedule_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Interview schedule not found")
+
+    if schedule.scheduled_by_employer_id != employer.id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    if schedule.is_cancelled:
+        raise HTTPException(status_code=400, detail="Cannot start a cancelled interview")
+
+    # Update timestamp
+    schedule.actual_start_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # Get candidate info
+    application = db.query(Application).filter(Application.id == schedule.application_id).first()
+    job = db.query(Job).filter(Job.id == application.job_id).first()
+    seeker = db.query(JobSeeker).filter(JobSeeker.id == application.job_seeker_id).first()
+    seeker_user = db.query(UserModel).filter(UserModel.id == seeker.user_id).first()
+
+    if seeker_user:
+        # 1. Email
+        html_body, text_body = _interview_started_email(
+            seeker_name=seeker.full_name,
+            job_title=job.title,
+            company_name=employer.company_name,
+            meeting_link=schedule.meeting_link
+        )
+        background_tasks.add_task(
+            send_email,
+            to_email=seeker_user.email,
+            subject=f"🚀 INTERVIEW STARTED: {job.title} at {employer.company_name}",
+            html_body=html_body,
+            text_body=text_body,
+        )
+
+        # 2. In-App Notification
+        from app.models.notification import Notification, NotificationType
+        new_notif = Notification(
+            user_id=seeker_user.id,
+            title="Interview Started!",
+            message=f"The employer has started the interview for '{job.title}'. Join now!",
+            type=NotificationType.INTERVIEW,
+            link=schedule.meeting_link or "/job-seeker/interviews"
+        )
+        db.add(new_notif)
+        db.commit()
+
+    return {
+        "success": True,
+        "message": "Candidate has been notified that the interview is starting",
+        "started_at": schedule.actual_start_at.isoformat()
     }

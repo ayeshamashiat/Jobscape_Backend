@@ -1,6 +1,6 @@
 # app/models/chat.py
 import uuid
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 from sqlalchemy import String, Boolean, ForeignKey, DateTime, Text, func, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -21,11 +21,10 @@ class ChatRoom(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    application_id: Mapped[uuid.UUID] = mapped_column(
+    application_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("applications.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True
+        nullable=True
     )
 
     employer_id: Mapped[uuid.UUID] = mapped_column(

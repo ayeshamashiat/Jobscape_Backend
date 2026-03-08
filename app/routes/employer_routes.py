@@ -1,4 +1,5 @@
 import uuid
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
@@ -741,6 +742,36 @@ def get_my_jobs(
     return result
 
 
+@router.get("/jobs/market", response_model=JobSearchResponse)
+def get_employer_job_market(
+    keyword: Optional[str] = Query(None),
+    industry: Optional[str] = Query(None),
+    location: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allows employers to browse all active jobs on the platform.
+    This provides visibility into the market competition.
+    """
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can access market view")
+
+    from app.crud import job_crud
+    
+    result = job_crud.search_jobs(
+        db=db,
+        keyword=keyword,
+        industry=industry,
+        location=location,
+        skip=skip,
+        limit=limit
+    )
+    return result
+
+
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: str,
@@ -1000,6 +1031,56 @@ def get_job_stats(
         acceptance_rate=acceptance_rate
     )
 
+@router.post("/public/chat")
+def employer_initiate_chat(
+    seeker_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allow an employer to open/find a direct chat room with a specific job seeker.
+    Returns the room_id so the employer can navigate to the chat.
+    """
+    from app.models.chat import ChatRoom
+    from app.models.job_seeker import JobSeeker
+
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can initiate chats")
+
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer profile not found")
+
+    seeker = db.query(JobSeeker).filter(JobSeeker.id == seeker_id).first()
+    if not seeker:
+        raise HTTPException(status_code=404, detail="Job seeker not found")
+
+    # Find or create a direct room (no application_id)
+    room = db.query(ChatRoom).filter(
+        ChatRoom.employer_id == employer.id,
+        ChatRoom.job_seeker_id == seeker.id,
+        ChatRoom.application_id == None
+    ).first()
+
+    if not room:
+        room = ChatRoom(
+            employer_id=employer.id,
+            job_seeker_id=seeker.id,
+            application_id=None,
+            is_active=True
+        )
+        db.add(room)
+        db.commit()
+        db.refresh(room)
+
+    return {
+        "room_id": str(room.id),
+        "employer_id": str(employer.id),
+        "seeker_id": str(seeker.id),
+        "is_active": room.is_active
+    }
+
+
 @router.get("/public/{employer_id}")
 def get_employer_public_profile(
     employer_id: uuid.UUID,
@@ -1046,12 +1127,13 @@ def get_employer_public_profile(
         .filter(Job.employer_id == employer_id)
         .scalar()
     )
+    from app.models.application import ApplicationStatus
     responded = (
         db.query(func.count(Application.id))
         .join(Job, Application.job_id == Job.id)
         .filter(
             Job.employer_id == employer_id,
-            Application.status != 'pending'
+            Application.status != ApplicationStatus.PENDING
         )
         .scalar()
     )

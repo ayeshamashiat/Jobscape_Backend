@@ -55,7 +55,7 @@ class MessageResponse(BaseModel):
 
 class RoomResponse(BaseModel):
     id: UUID
-    application_id: UUID
+    application_id: Optional[UUID] = None
     job_title: Optional[str] = None
     company_name: Optional[str] = None
     applicant_name: Optional[str] = None
@@ -154,6 +154,17 @@ def get_my_rooms(
         else:
             other_party_name = employer_obj.company_name if employer_obj else "Employer"
 
+        # Calculate unread count
+        unread = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.room_id == room.id,
+                ChatMessage.sender_user_id != current_user.id,
+                ChatMessage.status != MessageStatus.READ
+            )
+            .count()
+        )
+
         result.append(RoomResponse(
             id=room.id,
             application_id=room.application_id,
@@ -163,10 +174,46 @@ def get_my_rooms(
             other_party_name=other_party_name,
             last_message=last_msg.content if last_msg else None,
             last_message_at=last_msg.created_at if last_msg else None,
+            unread_count=unread,
             is_active=room.is_active
         ))
 
     return result
+
+
+@router.get("/unread-total", response_model=dict)
+def get_unread_total(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get total unread message count across all rooms for the user"""
+    from app.models.employer import Employer
+    from app.models.job_seeker import JobSeeker
+
+    if current_user.role == UserRole.EMPLOYER:
+        employer = db.query(Employer).filter(Employer.user_id == current_user.id).first()
+        if not employer:
+            return {"total": 0}
+        room_ids = db.query(ChatRoom.id).filter(ChatRoom.employer_id == employer.id).all()
+    else:
+        seeker = db.query(JobSeeker).filter(JobSeeker.user_id == current_user.id).first()
+        if not seeker:
+            return {"total": 0}
+        room_ids = db.query(ChatRoom.id).filter(ChatRoom.job_seeker_id == seeker.id).all()
+
+    room_id_list = [r[0] for r in room_ids]
+
+    total = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.room_id.in_(room_id_list),
+            ChatMessage.sender_user_id != current_user.id,
+            ChatMessage.status != MessageStatus.READ
+        )
+        .count()
+    )
+
+    return {"total": total}
 
 
 @router.get("/rooms/{room_id}/messages", response_model=List[MessageResponse])
@@ -259,6 +306,35 @@ def send_message(
         seeker = db.query(JobSeeker).filter(JobSeeker.user_id == current_user.id).first()
         sender_name = seeker.full_name if seeker else "Applicant"
 
+    # 3. Trigger In-App Notification
+    try:
+        from app.models.notification import Notification, NotificationType
+        
+        # Determine recipient user_id
+        if user_role == "employer":
+            # Sender is employer, recipient is job seeker
+            seeker_user_id = db.query(JobSeeker.user_id).filter(JobSeeker.id == room.job_seeker_id).scalar()
+            recipient_user_id = seeker_user_id
+            link = "/job-seeker/messages"
+        else:
+            # Sender is job seeker, recipient is employer
+            employer_user_id = db.query(Employer.user_id).filter(Employer.id == room.employer_id).scalar()
+            recipient_user_id = employer_user_id
+            link = "/employer/inbox"
+            
+        if recipient_user_id:
+            new_notif = Notification(
+                user_id=recipient_user_id,
+                title=f"New message from {sender_name}",
+                message=msg.content[:100] + ("..." if len(msg.content) > 100 else ""),
+                type=NotificationType.MESSAGE,
+                link=link
+            )
+            db.add(new_notif)
+            db.commit()
+    except Exception as e:
+        print(f"Failed to trigger chat notification: {e}")
+
     return MessageResponse(
         id=msg.id,
         room_id=msg.room_id,
@@ -323,6 +399,195 @@ async def upload_attachment(
     db.commit()
 
     return {'url': result['secure_url'], 'filename': file.filename}
+
+
+# ─── Global Message Routes (No /chat prefix) ───────────────────────────────
+# We define these separately to match the frontend expectations in lib/api/messages.ts
+
+direct_messages_router = APIRouter(tags=["chat"])
+
+class DirectMessageCreate(BaseModel):
+    recipient_id: UUID
+    recipient_type: str # "employer" or "job_seeker"
+    content: str = Field(..., min_length=1, max_length=4000)
+
+@direct_messages_router.post("/messages", response_model=MessageResponse)
+def send_direct_message(
+    body: DirectMessageCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Direct messaging without an explicit application_id.
+    Matches frontend lib/api/messages.ts call to POST /messages.
+    """
+    from app.models.employer import Employer
+    from app.models.job_seeker import JobSeeker
+
+    # 1. Identify parties
+    room = None
+    if body.recipient_type == "employer":
+        employer = db.query(Employer).filter(Employer.id == body.recipient_id).first()
+        if not employer:
+            raise HTTPException(404, "Employer not found")
+        
+        seeker = db.query(JobSeeker).filter(JobSeeker.user_id == current_user.id).first()
+        if not seeker:
+            raise HTTPException(403, "Only job seekers can send direct messages to employers from their profile")
+        
+        # Find or create a room without application_id
+        room = db.query(ChatRoom).filter(
+            ChatRoom.employer_id == employer.id,
+            ChatRoom.job_seeker_id == seeker.id,
+            ChatRoom.application_id == None
+        ).first()
+
+        if not room:
+            room = ChatRoom(
+                employer_id=employer.id,
+                job_seeker_id=seeker.id,
+                application_id=None,
+                is_active=True
+            )
+            db.add(room)
+            db.commit()
+            db.refresh(room)
+        
+        sender_role = "job_seeker"
+        sender_name = seeker.full_name
+    
+    else: # recipient_type == "job_seeker"
+        seeker = db.query(JobSeeker).filter(JobSeeker.id == body.recipient_id).first()
+        if not seeker:
+            raise HTTPException(404, "Job seeker not found")
+        
+        emp = db.query(Employer).filter(Employer.user_id == current_user.id).first()
+        if not emp:
+            raise HTTPException(403, "Only employers can send direct messages to job seekers")
+
+        # Find or create a room without application_id
+        room = db.query(ChatRoom).filter(
+            ChatRoom.employer_id == emp.id,
+            ChatRoom.job_seeker_id == seeker.id,
+            ChatRoom.application_id == None
+        ).first()
+
+        if not room:
+            room = ChatRoom(
+                employer_id=emp.id,
+                job_seeker_id=seeker.id,
+                application_id=None,
+                is_active=True
+            )
+            db.add(room)
+            db.commit()
+            db.refresh(room)
+        
+        sender_role = "employer"
+        sender_name = emp.company_name
+
+    # 2. Add message
+    msg = ChatMessage(
+        room_id=room.id,
+        sender_user_id=current_user.id,
+        sender_role=sender_role,
+        content=body.content,
+        status=MessageStatus.SENT
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+
+    # 3. Trigger In-App Notification
+    from app.models.notification import Notification, NotificationType
+    recipient_user_id = employer.user_id if body.recipient_type == "employer" else seeker.user_id
+    
+    new_notif = Notification(
+        user_id=recipient_user_id,
+        title=f"New message from {sender_name}",
+        message=body.content[:100] + ("..." if len(body.content) > 100 else ""),
+        type=NotificationType.MESSAGE,
+        link="/employer/chat" if body.recipient_type == "employer" else "/job-seeker/messages"
+    )
+    db.add(new_notif)
+    db.commit()
+
+    return MessageResponse(
+        id=msg.id,
+        room_id=msg.room_id,
+        sender_user_id=msg.sender_user_id,
+        sender_role=msg.sender_role,
+        sender_name=sender_name,
+        content=msg.content,
+        status=msg.status,
+        is_system_message=msg.is_system_message,
+        attachments=[],
+        created_at=msg.created_at
+    )
+
+
+class BulkMessageRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    statuses: List[ApplicationStatus]
+
+@router.post("/job/{job_id}/bulk-message")
+def bulk_message_applicants(
+    job_id: uuid.UUID,
+    data: BulkMessageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Employer sends a group message to candidates in specific application statuses"""
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can send bulk messages")
+
+    from app.models.employer import Employer
+    from app.models.job import Job
+    from app.models.job_seeker import JobSeeker
+    from app.models.notification import Notification, NotificationType
+
+    employer = db.query(Employer).filter(Employer.user_id == current_user.id).first()
+    job = db.query(Job).filter(Job.id == job_id, Job.employer_id == employer.id).first()
+
+    if not job:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    applications = db.query(Application).filter(
+        Application.job_id == job_id,
+        Application.status.in_(data.statuses)
+    ).all()
+
+    sent_count = 0
+    for app in applications:
+        room = get_or_create_room(db, app.id)
+        if not room.is_active:
+            continue
+
+        msg = ChatMessage(
+            room_id=room.id,
+            sender_user_id=current_user.id,
+            sender_role="employer",
+            content=data.message,
+            status=MessageStatus.SENT,
+            attachments=[]
+        )
+        db.add(msg)
+        
+        seeker_user_id = db.query(JobSeeker.user_id).filter(JobSeeker.id == app.job_seeker_id).scalar()
+        if seeker_user_id:
+            new_notif = Notification(
+                user_id=seeker_user_id,
+                title=f"New message from {employer.company_name}",
+                message=data.message[:100] + ("..." if len(data.message) > 100 else ""),
+                type=NotificationType.MESSAGE,
+                link="/job-seeker/messages"
+            )
+            db.add(new_notif)
+        
+        sent_count += 1
+
+    db.commit()
+    return {"message": "Bulk messages sent", "sent_count": sent_count}
 
 
 # ─── Private Helpers ──────────────────────────────────────────────────────────

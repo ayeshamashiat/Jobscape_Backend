@@ -173,15 +173,6 @@ def get_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
     job = job_crud.get_job_by_id(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    employer = job.employer
-    job.employer = {
-        "id": str(employer.id),
-        "full_name": employer.full_name,
-        "job_title": employer.job_title,
-        "company_name": employer.company_name,
-        "profile_picture_url": employer.profile_picture_url,
-    }
-    
     return job
 
 

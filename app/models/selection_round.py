@@ -10,11 +10,12 @@ import enum
 
 
 class RoundType(str, enum.Enum):
-    SCREENING = 'screening'     # Initial HR screen
-    TECHNICAL = 'technical'     # Technical/skill test
-    INTERVIEW = 'interview'     # In-person or video interview
-    ASSESSMENT = 'assessment'   # Written/task-based test
-    FINAL = 'final'             # Final round / offer discussion
+    INITIAL_SCREENING = "INITIAL_SCREENING"
+    TECHNICAL_INTERVIEW = "TECHNICAL_INTERVIEW"
+    HR_INTERVIEW = "HR_INTERVIEW"
+    CODING_ROUND = "CODING_ROUND"
+    QUIZ_TASK = "QUIZ_TASK"
+    FINAL_CONVERSATION = "FINAL_CONVERSATION"
 
 
 class SelectionProcess(Base):
@@ -35,7 +36,7 @@ class SelectionProcess(Base):
         nullable=False
     )
 
-    # 1 to 3 rounds stored as JSONB array for simplicity.
+    # 1 to 5 rounds stored as JSONB array for simplicity.
     # Each round: {
     #   'number': int,
     #   'type': str,
@@ -43,7 +44,9 @@ class SelectionProcess(Base):
     #   'description': str,
     #   'duration_minutes': int,
     #   'is_online': bool,
-    #   'location_or_link': str
+    #   'location_or_link': str,
+    #   'time_limit_minutes': int (for coding rounds),
+    #   'instructions': str
     # }
     rounds: Mapped[List[dict]] = mapped_column(JSONB, default=list, nullable=False)
 

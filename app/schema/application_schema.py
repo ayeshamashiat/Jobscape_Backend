@@ -38,6 +38,9 @@ class ApplicationResponse(BaseModel):
     cover_letter: Optional[str]
     match_score: int
     skills_match: dict
+    ats_score: Optional[int] = 0
+    ats_report: Optional[dict] = None
+    current_round: int = 0
     applied_at: datetime
     updated_at: datetime
     

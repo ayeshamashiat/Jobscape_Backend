@@ -152,3 +152,61 @@ def _send_selection_email(seeker_email: str, seeker_name: str, job, rounds: List
         html_body=html_body,
         text_body=text_body
     )
+
+
+def send_round_advancement_email(seeker_email: str, seeker_name: str, job_title: str, company_name: str, round_number: int, round_title: str, round_type: str, instructions: Optional[str] = None):
+    """Notify candidate they've moved to the next round."""
+    subject = f"Congratulations! You've advanced to Round {round_number} for {job_title}"
+    
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+                <h2 style="color: #2563eb;">Good News!</h2>
+                <p>Hi {seeker_name},</p>
+                <p>We are pleased to inform you that you have advanced to the next stage of the selection process for the <strong>{job_title}</strong> position at <strong>{company_name}</strong>.</p>
+                
+                <div style="background-color: #f9fafb; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2563eb;">
+                    <h3 style="margin-top: 0;">Next Round: Round {round_number}</h3>
+                    <p><strong>Title:</strong> {round_title}</p>
+                    <p><strong>Type:</strong> {round_type.replace('_', ' ').title()}</p>
+                    {f'<p><strong>Instructions:</strong> {instructions}</p>' if instructions else ''}
+                </div>
+                
+                <p>The employer will contact you shortly with further details or a specific schedule.</p>
+                <p>Best of luck!</p>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                <p style="font-size: 12px; color: #666;">This is an automated notification from Jobscape.</p>
+            </div>
+        </body>
+    </html>
+    """
+    text_body = f"Hi {seeker_name},\n\nCongratulations! You've advanced to Round {round_number} ({round_title}) for {job_title} at {company_name}.\n\nNext steps: {instructions if instructions else 'The employer will contact you shortly.'}\n\nBest of luck!"
+    
+    send_email(seeker_email, subject, html_body, text_body)
+
+
+def send_rejection_email(seeker_email: str, seeker_name: str, job_title: str, company_name: str):
+    """Send an empathetic rejection email."""
+    subject = f"Update on your application for {job_title} at {company_name}"
+    
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+                <p>Hi {seeker_name},</p>
+                <p>Thank you for taking the time to apply for the <strong>{job_title}</strong> position at <strong>{company_name}</strong> and for sharing your background with us.</p>
+                <p>We received many applications for this role, and after careful consideration, we have decided not to move forward with your candidacy at this time.</p>
+                <p>This was a difficult decision, as we truly appreciate your interest in joining our team. We encourage you to keep an eye on our career page for future openings that might be a good fit for your skills and experience.</p>
+                <p>We wish you all the best in your job search and your future professional endeavors.</p>
+                <p>Sincerely,</p>
+                <p>The {company_name} Hiring Team</p>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                <p style="font-size: 12px; color: #666;">This is an automated notification from Jobscape on behalf of {company_name}.</p>
+            </div>
+        </body>
+    </html>
+    """
+    text_body = f"Hi {seeker_name},\n\nThank you for taking the time to apply for the {job_title} position at {company_name} and for sharing your background with us.\n\nWe received many applications for this role, and after careful consideration, we have decided not to move forward with your candidacy at this time.\n\nThis was a difficult decision, as we truly appreciate your interest in joining our team. We encourage you to keep an eye on our career page for future openings that might be a good fit for your skills and experience.\n\nWe wish you all the best in your job search and your future professional endeavors.\n\nSincerely,\nThe {company_name} Hiring Team"
+    
+    send_email(seeker_email, subject, html_body, text_body)

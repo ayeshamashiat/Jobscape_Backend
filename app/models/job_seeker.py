@@ -185,4 +185,11 @@ class JobSeeker(Base):
         cascade="all, delete-orphan"
     )
 
-from app.models.cover_letter import SavedCoverLetter 
+    saved_jobs = relationship(
+        "SavedJob",
+        back_populates="job_seeker",
+        cascade="all, delete-orphan"
+    )
+
+from app.models.cover_letter import SavedCoverLetter
+from app.models.saved_job import SavedJob

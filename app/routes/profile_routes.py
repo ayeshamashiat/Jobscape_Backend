@@ -10,6 +10,7 @@ from app.utils.file_validators import validate_image_file
 import cloudinary.uploader
 from typing import Dict
 from app.schema.job_seeker_schema import JobSeekerProfileUpdate, JobSeekerProfileResponse
+from uuid import UUID
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -222,3 +223,63 @@ def update_profile(
     db.refresh(jobseeker)
     
     return jobseeker
+
+
+@router.get("/job-seeker/{seeker_id}", response_model=JobSeekerProfileResponse)
+def get_public_job_seeker_profile(
+    seeker_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Employer view of a job seeker's public profile"""
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can view public seeker profiles")
+    
+    seeker = db.query(JobSeeker).filter(JobSeeker.id == seeker_id).first()
+    if not seeker:
+        raise HTTPException(status_code=404, detail="Job seeker not found")
+        
+    return seeker
+
+
+@router.post("/job-seeker/{seeker_id}/view")
+def track_profile_view(
+    seeker_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Log an employer view of a seeker profile and notify the seeker"""
+    from datetime import datetime, timedelta
+    from app.models.notification import Notification, NotificationType
+    from app.models.employer import Employer
+
+    if current_user.role != UserRole.EMPLOYER:
+        return {"success": False, "message": "Not an employer"}
+
+    employer = db.query(Employer).filter(Employer.user_id == current_user.id).first()
+    seeker = db.query(JobSeeker).filter(JobSeeker.id == seeker_id).first()
+    
+    if not seeker:
+        raise HTTPException(status_code=404, detail="Job seeker not found")
+
+    # Throttling: Check if this employer notified this seeker in the last 24h
+    recent_notif = db.query(Notification).filter(
+        Notification.user_id == seeker.user_id,
+        Notification.type == NotificationType.PROFILE_VIEW,
+        Notification.message.like(f"%{employer.company_name}%"),
+        Notification.created_at >= datetime.now() - timedelta(hours=24)
+    ).first()
+
+    if not recent_notif:
+        new_notif = Notification(
+            user_id=seeker.user_id,
+            title="Profile Viewed!",
+            message=f"{employer.company_name} viewed your profile.",
+            type=NotificationType.PROFILE_VIEW,
+            link=f"/employer/public/{employer.id}" # Link back to employer profile
+        )
+        db.add(new_notif)
+        db.commit()
+        return {"success": True, "notified": True}
+
+    return {"success": True, "notified": False, "reason": "throttled"}
