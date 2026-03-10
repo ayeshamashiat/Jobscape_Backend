@@ -6,6 +6,7 @@ from app.database import get_db
 from app.utils.security import get_current_user
 from app.models.user import User, UserRole
 from app.models.application import ApplicationStatus, Application  # ✅ Application imported
+from app.models.interview import InterviewSchedule
 from app.schema.application_schema import (
     ApplicationCreate,
     ApplicationResponse,
@@ -112,7 +113,68 @@ def get_all_employer_applications(
         skip=skip,
         limit=limit
     )
-    return applications
+
+    from app.models.job_seeker import JobSeeker
+    from app.models.user import User as UserModel
+    from app.models.job import Job
+    from app.models.interview import InterviewSchedule
+
+    result = []
+    for app in applications:
+        job_seeker = db.query(JobSeeker).filter(JobSeeker.id == app.job_seeker_id).first()
+        user = db.query(UserModel).filter(UserModel.id == job_seeker.user_id).first()
+        job = db.query(Job).filter(Job.id == app.job_id).first()
+        
+        app_dict = app.__dict__.copy()
+        app_dict["applicant_name"] = job_seeker.full_name if job_seeker else None
+        app_dict["applicant_email"] = user.email if user else None
+        app_dict["job_title"] = job.title if job else None
+        
+        # Unified interview schedule tracking
+        schedule = db.query(InterviewSchedule).filter(
+            InterviewSchedule.application_id == app.id,
+            InterviewSchedule.is_confirmed == True
+        ).first()
+        
+        if schedule:
+            app_dict["interview_schedule_id"] = str(schedule.id)
+            
+            # Normalize meeting link: prioritize Slot ID for FCFS, Schedule ID for manual
+            style_val = schedule.style.value if hasattr(schedule.style, 'value') else schedule.style
+            meeting_link = schedule.meeting_link
+            
+            if style_val == "video_call":
+                if not meeting_link or meeting_link.lower() in ["tbd", "zoom", "meet", "none", "nan"]:
+                    # If it's an FCFS slot-based interview, use the slot ID as room ID
+                    if app.booked_slot_id:
+                        meeting_link = f"/interview/{app.booked_slot_id}"
+                    else:
+                        meeting_link = f"/interview/{schedule.id}"
+            
+            app_dict["booked_slot_id"] = str(schedule.id)
+            app_dict["booked_slot_datetime"] = schedule.confirmed_at
+            app_dict["booked_slot_duration_minutes"] = schedule.confirmed_duration_minutes
+            app_dict["booked_slot_location"] = schedule.location
+            app_dict["booked_slot_style"] = style_val
+            app_dict["booked_slot_meeting_link"] = meeting_link
+        
+        elif app.booked_slot:
+            app_dict["booked_slot_id"] = app.booked_slot_id
+            app_dict["booked_slot_datetime"] = app.booked_slot_datetime
+            app_dict["booked_slot_duration_minutes"] = app.booked_slot_duration_minutes
+            app_dict["booked_slot_location"] = app.booked_slot_location
+            app_dict["booked_slot_style"] = app.booked_slot_style
+            
+            link = app.booked_slot_meeting_link
+            if app.booked_slot_style == "video_call":
+                if not link or link.lower() in ["tbd", "zoom", "meet", "none", "nan"]:
+                    # Use the slot ID for FCFS room
+                    link = f"/interview/{app.booked_slot_id}"
+            app_dict["booked_slot_meeting_link"] = link
+        
+        result.append(app_dict)
+
+    return result
 
 
 # =============================================================
@@ -162,6 +224,16 @@ def get_job_applications(
         app_dict = app.__dict__.copy()
         app_dict["applicant_name"] = job_seeker.full_name if job_seeker else None
         app_dict["applicant_email"] = user.email if user else None
+        
+        # Populate booked slot fields
+        if app.booked_slot:
+            app_dict["booked_slot_id"] = app.booked_slot_id
+            app_dict["booked_slot_datetime"] = app.booked_slot_datetime
+            app_dict["booked_slot_duration_minutes"] = app.booked_slot_duration_minutes
+            app_dict["booked_slot_location"] = app.booked_slot_location
+            app_dict["booked_slot_style"] = app.booked_slot_style
+            app_dict["booked_slot_meeting_link"] = app.booked_slot_meeting_link
+        
         result.append(app_dict)
 
     return result
@@ -370,7 +442,34 @@ def get_application_details(
     else:
         raise HTTPException(status_code=403, detail="Unauthorized")
 
-    return application
+    # Enrich with booked slot details for job seeker
+    app_dict = {c.name: getattr(application, c.name) for c in application.__table__.columns}
+
+    # Try relationship first (booked_slot_id FK set), then fall back to reverse lookup
+    # (handles bookings that were made before booked_slot_id was properly saved)
+    slot = None
+    if application.booked_slot:
+        slot = application.booked_slot
+    else:
+        import app.models.interview as interview_models
+        # InterviewSlotPool has no application_id column — find via the applications collection
+        slot = db.query(interview_models.InterviewSlotPool).filter(
+            interview_models.InterviewSlotPool.applications.any(id=application.id)
+        ).first()
+
+    if slot:
+        app_dict["booked_slot_id"] = slot.id
+        app_dict["booked_slot_datetime"] = slot.datetime_utc
+        app_dict["booked_slot_duration_minutes"] = slot.duration_minutes
+        app_dict["booked_slot_location"] = slot.location
+        app_dict["booked_slot_style"] = slot.style
+        app_dict["booked_slot_meeting_link"] = getattr(slot, "meeting_link", None)
+        # Also repair the FK for future requests
+        if not application.booked_slot_id:
+            application.booked_slot_id = slot.id
+            db.commit()
+
+    return app_dict
 
 
 @router.post("/{application_id}/withdraw", response_model=ApplicationResponse)

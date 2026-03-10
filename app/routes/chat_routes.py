@@ -569,6 +569,7 @@ def bulk_message_applicants(
             sender_role="employer",
             content=data.message,
             status=MessageStatus.SENT,
+            is_system_message=True,
             attachments=[]
         )
         db.add(msg)

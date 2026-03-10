@@ -394,8 +394,17 @@ def get_application_full_details(
     if application.resume_id:
         resume = db.query(Resume).filter(Resume.id == application.resume_id).first()
     
+    # Build application dict with properties
+    app_dict = application.__dict__.copy()
+    if application.booked_slot:
+        app_dict["booked_slot_datetime"] = application.booked_slot_datetime
+        app_dict["booked_slot_duration_minutes"] = application.booked_slot_duration_minutes
+        app_dict["booked_slot_location"] = application.booked_slot_location
+        app_dict["booked_slot_style"] = application.booked_slot_style
+        app_dict["booked_slot_meeting_link"] = application.booked_slot_meeting_link
+
     return {
-        "application": application,
+        "application": app_dict,
         "job_seeker": {
             "id": str(job_seeker.id),
             "full_name": job_seeker.full_name,

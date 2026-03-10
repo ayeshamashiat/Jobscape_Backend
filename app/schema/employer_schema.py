@@ -81,6 +81,7 @@ class EmployerProfileResponse(BaseModel):
     verification_tier: str
     verified_at: Optional[datetime]
     trust_score: int
+    verification_badges: List[str] = []
 
     # Meta
     profile_completed: bool
@@ -149,6 +150,7 @@ class EmployerPublicBasic(BaseModel):
     company_website: Optional[str] = None
     verification_tier: str
     trust_score: int
+    verification_badges: List[str] = []
     total_job_posts_count: int
     founded_year: Optional[int] = None
     created_at: datetime

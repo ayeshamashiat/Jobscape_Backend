@@ -143,3 +143,71 @@ def get_selection_for_job(
     if not process:
         raise HTTPException(404, 'No selection process defined for this job')
     return process
+
+
+class SelectionAnnouncementRequest(BaseModel):
+    hired_application_ids: List[UUID]
+    announcement_message: Optional[str] = None
+
+
+@router.post("/job/{job_id}/announce")
+def announce_selection(
+    job_id: UUID,
+    body: SelectionAnnouncementRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Employer announces the selected candidates for a job"""
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can announce selection")
+
+    employer = db.query(Employer).filter(Employer.user_id == current_user.id).first()
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer profile not found")
+
+    job = db.query(Job).filter(Job.id == job_id, Job.employer_id == employer.id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.is_selection_announced:
+         raise HTTPException(status_code=400, detail="Selection has already been announced for this job")
+
+    # 1. Update applications to HIRED
+    hired_apps = db.query(Application).filter(
+        Application.id.in_(body.hired_application_ids),
+        Application.job_id == job_id
+    ).all()
+
+    if not hired_apps:
+        raise HTTPException(status_code=400, detail="No valid applications selected to hire")
+
+    from datetime import datetime, timezone
+    from app.models.notification import Notification, NotificationType
+
+    for app in hired_apps:
+        app.status = ApplicationStatus.HIRED
+        
+        # 2. Update JobSeeker profile
+        seeker = db.query(JobSeeker).filter(JobSeeker.id == app.job_seeker_id).first()
+        if seeker:
+            seeker.is_employed = True
+            seeker.current_job_id = job.id
+            seeker.current_employer_name = employer.company_name
+            seeker.hired_at = datetime.now(timezone.utc)
+            
+            # Notify hired candidates
+            notif = Notification(
+                user_id=seeker.user_id,
+                title=f"Congratulations! You've been selected for {job.title}",
+                message=f"We are excited to announce that you've been selected for the position at {employer.company_name}.",
+                type=NotificationType.SYSTEM,
+                link=f"/job-seeker/applications/{app.id}"
+            )
+            db.add(notif)
+
+    # 3. Mark job selection as announced
+    job.is_selection_announced = True
+    job.selection_announcement_date = datetime.now(timezone.utc)
+    
+    db.commit()
+    return {"message": f"Selection announced successfully. {len(hired_apps)} candidates marked as hired."}

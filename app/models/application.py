@@ -19,6 +19,7 @@ class ApplicationStatus(str, enum.Enum):
     INTERVIEW_SCHEDULED = "INTERVIEW_SCHEDULED"
     REJECTED = "REJECTED"
     ACCEPTED = "ACCEPTED"
+    HIRED = "HIRED"
     WITHDRAWN = "WITHDRAWN"
 
 
@@ -126,6 +127,9 @@ class Application(Base):
 
     # Selection Process Tracking
     current_round: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # 0 = Applied, 1-5 = Selection Rounds
+    
+    # Slot request tracking
+    has_requested_extra_slots: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 
@@ -133,3 +137,30 @@ class Application(Base):
     job = relationship("Job", back_populates="applications")
     job_seeker = relationship("JobSeeker", back_populates="applications")
     resume = relationship("Resume", back_populates="applications")
+    
+    booked_slot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), 
+        ForeignKey("interview_slot_pool.id", ondelete="SET NULL"),
+        nullable=True
+    )
+    booked_slot = relationship("InterviewSlotPool", back_populates="applications")
+    
+    @property
+    def booked_slot_datetime(self) -> Optional[datetime]:
+        return self.booked_slot.datetime_utc if self.booked_slot else None
+
+    @property
+    def booked_slot_duration_minutes(self) -> Optional[int]:
+        return self.booked_slot.duration_minutes if self.booked_slot else None
+
+    @property
+    def booked_slot_location(self) -> Optional[str]:
+        return self.booked_slot.location if self.booked_slot else None
+
+    @property
+    def booked_slot_style(self) -> Optional[str]:
+        return self.booked_slot.style if self.booked_slot else None
+
+    @property
+    def booked_slot_meeting_link(self) -> Optional[str]:
+        return self.booked_slot.meeting_link if self.booked_slot else None

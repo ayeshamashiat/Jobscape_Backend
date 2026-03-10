@@ -34,6 +34,7 @@ from app.routes import (
     subscription_routes,
     saved_job_routes,
     notification_routes,
+    video_routes,
 )
 
 # Create tables
@@ -188,3 +189,4 @@ app.include_router(selection_routes.router)
 app.include_router(subscription_routes.router)
 app.include_router(saved_job_routes.router)
 app.include_router(notification_routes.router)
+app.include_router(video_routes.router)

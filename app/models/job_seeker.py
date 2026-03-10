@@ -161,7 +161,18 @@ class JobSeeker(Base):
     profile_picture_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     cloudinary_public_id: Mapped[Optional[str]] = mapped_column(String, nullable=True) 
 
+    # Employment Status
+    is_employed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    current_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="SET NULL"),
+        nullable=True
+    )
+    current_employer_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    hired_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Relationships
+    current_job = relationship("Job", foreign_keys=[current_job_id])
     user = relationship(
         "User",
         back_populates="job_seeker_profile"

@@ -358,6 +358,10 @@ def get_my_employer_profile(
     employer = employer_crud.get_employer_by_user_id(db, current_user.id)
     if not employer:
         raise HTTPException(status_code=404, detail="Employer profile not found")
+    
+    # Populate verification badges
+    employer.verification_badges = employer.get_verification_badges()
+    
     return employer
 
 
@@ -1081,8 +1085,8 @@ def employer_initiate_chat(
     }
 
 
-@router.get("/public/{employer_id}")
-def get_employer_public_profile(
+@router.get("/public/{employer_id}", response_model=EmployerPublicResponse)
+def get_public_employer_profile(
     employer_id: uuid.UUID,
     db: Session = Depends(get_db)
 ):
@@ -1096,7 +1100,10 @@ def get_employer_public_profile(
 
     employer = db.query(Employer).filter(Employer.id == employer_id).first()
     if not employer:
-        raise HTTPException(status_code=404, detail='Employer not found')
+        raise HTTPException(status_code=404, detail="Employer not found")
+
+    # Populate verification badges
+    employer.verification_badges = employer.get_verification_badges()
 
     # Active, open jobs
     jobs = (
@@ -1114,7 +1121,7 @@ def get_employer_public_profile(
     company_employees = (
         db.query(JobSeeker)
         .filter(
-            JobSeeker.experience.cast(Text).ilike(f'%{employer.company_name}%')
+            JobSeeker.experience.cast(Text).ilike(f"%{employer.company_name}%")
         )
         .limit(12)
         .all()
@@ -1128,7 +1135,7 @@ def get_employer_public_profile(
         .scalar()
     )
     from app.models.application import ApplicationStatus
-    responded = (
+    responded_apps = (
         db.query(func.count(Application.id))
         .join(Job, Application.job_id == Job.id)
         .filter(
@@ -1137,12 +1144,12 @@ def get_employer_public_profile(
         )
         .scalar()
     )
-    response_rate = int((responded / total_apps) * 100) if total_apps and total_apps > 0 else None
+    response_rate = int((responded_apps / total_apps) * 100) if total_apps and total_apps > 0 else None
 
     return {
-        'employer': EmployerPublicBasic.from_orm(employer),
-        'active_jobs': jobs,
-        'employees_on_platform': [EmployeeOnPlatform.from_orm(e) for e in company_employees],
-        'total_jobs_posted': employer.total_job_posts_count,
-        'response_rate': response_rate,
+        "employer": employer,
+        "active_jobs": jobs,
+        "employees_on_platform": company_employees,
+        "total_jobs_posted": employer.total_job_posts_count,
+        "response_rate": response_rate,
     }
