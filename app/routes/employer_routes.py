@@ -1,14 +1,20 @@
+import uuid
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, Text
 from datetime import datetime, timezone, timedelta
 from app.database import get_db
+from app.models.job_seeker import JobSeeker
+from sqlalchemy import func
 from app.schema.employer_schema import (
     EmployerRegistrationCreate,
     EmployerProfileUpdate,
     EmployerProfileResponse,
     WorkEmailVerificationConfirm,
-    WorkEmailVerificationStatusResponse
+    WorkEmailVerificationStatusResponse,
+    EmployerPublicResponse
 )
 from app.schema.job_schema import (
     JobCreate,
@@ -64,10 +70,34 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
     """
     existing_user = user_crud.get_user_by_email(db, user.email)
     if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
+        # ✅ ADD THIS: Handle unverified users
+        if not existing_user.is_email_verified:
+            token = create_email_verification_token(db, existing_user)
+            send_verification_email(existing_user.email, token)
+            
+            if DEV_MODE:
+                return {
+                    "id": str(existing_user.id),
+                    "email": existing_user.email,
+                    "role": existing_user.role.value,
+                    "is_email_verified": existing_user.is_email_verified,
+                    "is_active": existing_user.is_active,
+                    "created_at": existing_user.created_at,
+                    "dev_verification_code": DEV_VERIFICATION_CODE,
+                    "devmode": True,
+                    "message": "Account exists but not verified. We've resent the verification email."
+                }
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Account already exists but email is not verified. We've resent the verification email."
+                )
+        else:
+            # User exists and is verified
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered. Please login or reset your password."
+            )
     
     # ✅ ONLY Create user (NO Employer profile yet)
     new_user = user_crud.create_user(db, user.email, UserRole.EMPLOYER, user.password)
@@ -78,7 +108,7 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
         return {
             "id": str(new_user.id),
             "email": new_user.email,
-            "role": new_user.role.value,  # Assuming UserRole is an Enum
+            "role": new_user.role.value,
             "is_email_verified": new_user.is_email_verified,
             "is_active": new_user.is_active,
             "created_at": new_user.created_at,
@@ -91,6 +121,7 @@ def register_employer(user: UserCreate, db: Session = Depends(get_db)):
         send_verification_email(new_user.email, token)
     
     return new_user
+
 
 # ===== COMPLETE REGISTRATION (Step 2) =====
 @router.post("/register/complete", response_model=EmployerProfileResponse, status_code=status.HTTP_201_CREATED)
@@ -327,6 +358,10 @@ def get_my_employer_profile(
     employer = employer_crud.get_employer_by_user_id(db, current_user.id)
     if not employer:
         raise HTTPException(status_code=404, detail="Employer profile not found")
+    
+    # Populate verification badges
+    employer.verification_badges = employer.get_verification_badges()
+    
     return employer
 
 
@@ -711,6 +746,36 @@ def get_my_jobs(
     return result
 
 
+@router.get("/jobs/market", response_model=JobSearchResponse)
+def get_employer_job_market(
+    keyword: Optional[str] = Query(None),
+    industry: Optional[str] = Query(None),
+    location: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allows employers to browse all active jobs on the platform.
+    This provides visibility into the market competition.
+    """
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can access market view")
+
+    from app.crud import job_crud
+    
+    result = job_crud.search_jobs(
+        db=db,
+        keyword=keyword,
+        industry=industry,
+        location=location,
+        skip=skip,
+        limit=limit
+    )
+    return result
+
+
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: str,
@@ -969,3 +1034,122 @@ def get_job_stats(
         rejected_applications=rejected_apps,
         acceptance_rate=acceptance_rate
     )
+
+@router.post("/public/chat")
+def employer_initiate_chat(
+    seeker_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allow an employer to open/find a direct chat room with a specific job seeker.
+    Returns the room_id so the employer can navigate to the chat.
+    """
+    from app.models.chat import ChatRoom
+    from app.models.job_seeker import JobSeeker
+
+    if current_user.role != UserRole.EMPLOYER:
+        raise HTTPException(status_code=403, detail="Only employers can initiate chats")
+
+    employer = employer_crud.get_employer_by_user_id(db, current_user.id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer profile not found")
+
+    seeker = db.query(JobSeeker).filter(JobSeeker.id == seeker_id).first()
+    if not seeker:
+        raise HTTPException(status_code=404, detail="Job seeker not found")
+
+    # Find or create a direct room (no application_id)
+    room = db.query(ChatRoom).filter(
+        ChatRoom.employer_id == employer.id,
+        ChatRoom.job_seeker_id == seeker.id,
+        ChatRoom.application_id == None
+    ).first()
+
+    if not room:
+        room = ChatRoom(
+            employer_id=employer.id,
+            job_seeker_id=seeker.id,
+            application_id=None,
+            is_active=True
+        )
+        db.add(room)
+        db.commit()
+        db.refresh(room)
+
+    return {
+        "room_id": str(room.id),
+        "employer_id": str(employer.id),
+        "seeker_id": str(seeker.id),
+        "is_active": room.is_active
+    }
+
+
+@router.get("/public/{employer_id}", response_model=EmployerPublicResponse)
+def get_public_employer_profile(
+    employer_id: uuid.UUID,
+    db: Session = Depends(get_db)
+):
+    """
+    Public employer profile — accessible to anyone (auth optional).
+    Returns company info, active jobs, and platform employees.
+    """
+    from sqlalchemy import Text
+    from app.models.job_seeker import JobSeeker
+    from app.schema.employer_schema import EmployerPublicBasic, EmployeeOnPlatform
+
+    employer = db.query(Employer).filter(Employer.id == employer_id).first()
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer not found")
+
+    # Populate verification badges
+    employer.verification_badges = employer.get_verification_badges()
+
+    # Active, open jobs
+    jobs = (
+        db.query(Job)
+        .filter(
+            Job.employer_id == employer_id,
+            Job.is_active == True,
+            Job.is_closed == False
+        )
+        .order_by(Job.created_at.desc())
+        .all()
+    )
+
+    # Job seekers on the platform that list this company in their experience
+    company_employees = (
+        db.query(JobSeeker)
+        .filter(
+            JobSeeker.experience.cast(Text).ilike(f"%{employer.company_name}%")
+        )
+        .limit(12)
+        .all()
+    )
+
+    # Feature 5.3 — Employer response rate
+    total_apps = (
+        db.query(func.count(Application.id))
+        .join(Job, Application.job_id == Job.id)
+        .filter(Job.employer_id == employer_id)
+        .scalar()
+    )
+    from app.models.application import ApplicationStatus
+    responded_apps = (
+        db.query(func.count(Application.id))
+        .join(Job, Application.job_id == Job.id)
+        .filter(
+            Job.employer_id == employer_id,
+            Application.status != ApplicationStatus.PENDING
+        )
+        .scalar()
+    )
+    response_rate = int((responded_apps / total_apps) * 100) if total_apps and total_apps > 0 else None
+
+    return {
+        "employer": employer,
+        "active_jobs": jobs,
+        "employees_on_platform": company_employees,
+        "total_jobs_posted": employer.total_job_posts_count,
+        "response_rate": response_rate,
+    }

@@ -85,9 +85,9 @@ def register_jobseeker(user: JobSeekerBasicRegistration, db: Session = Depends(g
     
     # 2. **Create BASIC JobSeeker profile (not complete yet)**
     jobseeker = JobSeeker(
-        userid=newuser.id,
-        fullname=user.full_name,  # ✅ From registration
-        profilecompleted=False    # ❌ Will be True after CV upload
+        user_id=newuser.id,
+        full_name=user.full_name,  # ✅ From registration
+        profile_completed=False    # ❌ Will be True after CV upload
     )
     db.add(jobseeker)
     db.commit()
@@ -185,24 +185,30 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 # ===================== EMAIL VERIFICATION =====================
 
-@router.post("/verify-email/request", tags=["public"])
+@router.post("/verify-email/request")
 def request_email_verification(request: EmailVerificationRequest, db: Session = Depends(get_db)):
-    """Request a new email verification token"""
     user = user_crud.get_user_by_email(db, request.email)
-    
     if not user:
         return {"message": "If email exists, verification link has been sent"}
     
+    # ✅ CHANGED: If already verified, just send them to login instead of erroring
     if user.is_email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already verified"
-        )
+        return {
+            "message": "Email already verified. Please login.",
+            "is_verified": True,
+            "redirect": "/login"
+        }
     
+    # Clear old token before creating new one
+    user.email_verification_token = None
+    user.email_verification_expiry = None
+    db.commit()
+    
+    # Create new token
     token = create_email_verification_token(db, user)
     send_verification_email(user.email, token)
-    
     return {"message": "Verification email sent"}
+
 
 
 @router.post("/verify-email/confirm", tags=["public"])

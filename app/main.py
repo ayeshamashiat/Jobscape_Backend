@@ -1,3 +1,7 @@
+"""
+Jobscape FastAPI Application Entry Point
+"""
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
@@ -7,29 +11,42 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
-from app.database import Base, engine
-from app.models import user, job_seeker, employer, job, resume, password_reset
-from app.utils.cloudinary_client import init_cloudinary
-from app.routes import admin_routes, auth_routes, employer_routes, job_routes, resume_routes, oauth_routes
-from app.routes.subscription_routes import router as subscription_router
-from app.tasks.job_closure import close_expired_jobs
-from app.routes.application_routes import router as application_router
-from app.routes.profile_routes import router as profile_picture_router
 
+from app.database import engine, Base
+from app.utils.cloudinary_client import init_cloudinary
+from app.tasks.job_closure import close_expired_jobs
+
+# ─── Route imports ────────────────────────────────────────────────────────────
+from app.routes import (
+    admin_routes,
+    application_routes,
+    auth_routes,
+    chat_routes,
+    commute_routes,        # ← commute score feature
+    cover_letter_routes,
+    employer_routes,
+    interview_routes,
+    job_routes,
+    oauth_routes,
+    profile_routes,
+    resume_routes,
+    selection_routes,
+    subscription_routes,
+    saved_job_routes,
+    notification_routes,
+    video_routes,
+)
 
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-
 # Initialize Cloudinary
 init_cloudinary()
-
 
 # Create scheduler
 scheduler = BackgroundScheduler()
 
-
-# ===== LIFESPAN EVENT HANDLER (REPLACES @app.on_event) =====
+# ===== LIFESPAN EVENT HANDLER =====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -66,7 +83,7 @@ app = FastAPI(
     swagger_ui_init_oauth={
         "usePkceWithAuthorizationCodeGrant": True,
     },
-    lifespan=lifespan  # ← ADD THIS
+    lifespan=lifespan
 )
 
 
@@ -82,6 +99,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
+        "https://jobscape.com",
         "https://your-frontend-domain.com",
         "null"
     ],
@@ -133,6 +151,7 @@ def custom_openapi():
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
+
 # Override the default OpenAPI function
 app.openapi = custom_openapi
 
@@ -148,19 +167,26 @@ def root():
         "docs": "/docs"
     }
 
-
 @app.get("/health", tags=["health"])
 def health_check():
     return {"status": "healthy"}
 
-
-# Include routers
-app.include_router(auth_routes.router)
-app.include_router(employer_routes.router)
-app.include_router(job_routes.router)
-app.include_router(resume_routes.router)
+# ─── Register routers ─────────────────────────────────────────────────────────
 app.include_router(admin_routes.router)
+app.include_router(application_routes.router)
+app.include_router(auth_routes.router)
+app.include_router(chat_routes.router)
+app.include_router(chat_routes.direct_messages_router) # Support for direct /messages calls
+app.include_router(commute_routes.router)
+app.include_router(cover_letter_routes.router)
+app.include_router(employer_routes.router)
+app.include_router(interview_routes.router)
+app.include_router(job_routes.router)
 app.include_router(oauth_routes.router)
-app.include_router(subscription_router)
-app.include_router(application_router)
-app.include_router(profile_picture_router)
+app.include_router(profile_routes.router)
+app.include_router(resume_routes.router)
+app.include_router(selection_routes.router)
+app.include_router(subscription_routes.router)
+app.include_router(saved_job_routes.router)
+app.include_router(notification_routes.router)
+app.include_router(video_routes.router)

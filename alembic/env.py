@@ -10,14 +10,7 @@ from app.database import Base
 # ============================================
 # IMPORT ALL YOUR MODELS HERE
 # ============================================
-from app.models.user import User
-from app.models.job_seeker import JobSeeker
-from app.models.employer import Employer
-from app.models.job import Job
-from app.models.resume import Resume
-from app.models.application import Application
-from app.models.password_reset import PasswordResetToken
-from app.models.cover_letter import SavedCoverLetter
+import app.models  # This imports __init__.py which loads all models
 # ============================================
 
 # this is the Alembic Config object, which provides

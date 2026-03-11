@@ -58,6 +58,10 @@ class Job(Base):
     # Flags
     is_fresh_graduate_friendly: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Hiring Process & Criteria
+    hiring_policy: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ats_threshold: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -69,8 +73,18 @@ class Job(Base):
         back_populates="jobs"
     )
 
+    @property
+    def posted_by(self):
+        return self.employer
+
     applications = relationship(
         "Application",
+        back_populates="job",
+        cascade="all, delete-orphan"
+    )
+
+    saved_by = relationship(
+        "SavedJob",
         back_populates="job",
         cascade="all, delete-orphan"
     )
@@ -85,6 +99,10 @@ class Job(Base):
     is_closed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     closure_reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "deadline", "manual", "filled"
+    
+    # Selection Announcement
+    selection_announcement_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_selection_announced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

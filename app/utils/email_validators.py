@@ -14,6 +14,7 @@ BLOCKED_DOMAINS = [
 def verify_work_email_ownership(email: str, company_website: str) -> Tuple[bool, str]:
     """
     Verify that email domain matches company website.
+    NO MX record validation - accepts any domain.
     
     Returns:
         (is_valid, error_message)
@@ -38,18 +39,7 @@ def verify_work_email_ownership(email: str, company_website: str) -> Tuple[bool,
     if email_base != website_base:
         return False, f"Email domain ({email_domain}) doesn't match company website ({website_domain})"
     
-    # CHECK 3: Domain has valid MX records
-    try:
-        mx_records = dns.resolver.resolve(email_domain, 'MX')
-        if not mx_records:
-            return False, f"Email domain {email_domain} cannot receive emails"
-    except dns.resolver.NXDOMAIN:
-        return False, f"Email domain {email_domain} does not exist"
-    except dns.resolver.NoAnswer:
-        return False, f"Email domain {email_domain} has no mail server"
-    except Exception as e:
-        # Don't block if DNS check fails
-        print(f"Warning: Could not verify email domain {email_domain}: {str(e)}")
-        pass
+    # ✅ REMOVED CHECK 3 - No MX record validation
+    # Accept any domain as long as it's not blocked and matches website
     
     return True, "Valid"

@@ -1,6 +1,6 @@
 # app/seed_data.py
 """
-Seed database with test data
+Enhanced database seeder for testing ATS matching and diverse jobs.
 Run: python -m app.seed_data
 """
 
@@ -14,24 +14,24 @@ from app.models.user import User, UserRole, Base
 from app.models.employer import Employer
 from app.models.job_seeker import JobSeeker
 from app.models.job import Job, JobType, WorkMode, ExperienceLevel
+from app.models.password_reset import PasswordResetToken 
 
-# Try importing Resume (if it exists)
 try:
     from app.models.resume import Resume
 except ImportError:
     Resume = None
-    print("⚠️  Resume model not found, skipping...")
 
-# Try importing other models that might exist
 try:
-    from app.models.application import Application
+    from app.models.application import Application, ApplicationStatus
+except ImportError:
+    Application = None
+
+try:
+    from app.models.selection_round import SelectionProcess
 except ImportError:
     pass
 
-try:
-    from app.models.subscription import Subscription
-except ImportError:
-    pass
+import random
 
 # Create tables AFTER all imports
 Base.metadata.create_all(bind=engine)
@@ -44,6 +44,8 @@ def seed_database():
         print("🗑️  Clearing existing data...")
         
         # Delete in reverse dependency order
+        if Application:
+            db.query(Application).delete()
         if Resume:
             db.query(Resume).delete()
         db.query(Job).delete()
@@ -63,7 +65,6 @@ def seed_database():
         )
         db.add(admin_user)
         db.commit()
-        print(f"✅ Admin created: admin@jobscape.com / admin123")
         
         # ===== CREATE TEST EMPLOYERS =====
         print("\n🏢 Creating test employers...")
@@ -94,32 +95,6 @@ def seed_database():
                 "job_title": "Founder",
                 "work_email": "rafiq@innovate.io",
                 "trust_score": 60
-            },
-            {
-                "email": "pending@bigcorp.com",
-                "password": "employer123",
-                "company_name": "Big Corp Industries",
-                "company_website": "https://bigcorp.com",
-                "industry": "Manufacturing",
-                "location": "Sylhet, Bangladesh",
-                "tier": "DOCUMENT_VERIFIED",
-                "full_name": "Ayesha Khan",
-                "job_title": "Recruitment Lead",
-                "work_email": "ayesha@bigcorp.com",
-                "trust_score": 75
-            },
-            {
-                "email": "unverified@newcompany.com",
-                "password": "employer123",
-                "company_name": "New Company",
-                "company_website": None,
-                "industry": "E-commerce",
-                "location": "Dhaka, Bangladesh",
-                "tier": "UNVERIFIED",
-                "full_name": "Mehedi Hasan",
-                "job_title": "CEO",
-                "work_email": "mehedi@newcompany.com",
-                "trust_score": 20
             }
         ]
         
@@ -147,7 +122,7 @@ def seed_database():
                 industry=emp_data["industry"],
                 location=emp_data["location"],
                 company_size="51-200",
-                description=f"Leading {emp_data['industry']} company in Bangladesh",
+                description=f"Leading {emp_data['industry']} company.",
                 verification_tier=emp_data["tier"],
                 trust_score=emp_data["trust_score"],
                 profile_completed=True,
@@ -156,188 +131,57 @@ def seed_database():
             db.add(employer)
             db.flush()
             created_employers.append((emp_data["email"], emp_data["company_name"], employer))
-            print(f"✅ Employer: {emp_data['email']} / employer123 [{emp_data['tier']}]")
         
         db.commit()
         
-        # ===== CREATE TEST JOB SEEKERS =====
-        print("\n👤 Creating test job seekers...")
+        # ===== CREATE DIVERSE JOBS =====
+        print("\n💼 Creating diverse test jobs...")
         
-        job_seekers_data = [
-            {
-                "email": "john.dev@gmail.com",
-                "password": "jobseeker123",
-                "full_name": "John Developer",
-                "phone": "+880 1712-345678",
-                "location": "Dhaka, Bangladesh",
-                "professional_summary": "Experienced backend developer with 3+ years in Python and FastAPI. Passionate about building scalable systems.",
-                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "REST APIs"],
-                "primary_industry": "Software Development",
-                "inferred_industries": ["Software Development", "Technology", "Cloud Computing"],
-                "experience": [
-                    {
-                        "title": "Backend Developer",
-                        "company": "Tech Solutions Ltd",
-                        "duration": "2021 - Present",
-                        "description": "Built RESTful APIs using FastAPI and PostgreSQL"
-                    }
-                ],
-                "education": [
-                    {
-                        "degree": "B.Sc. in Computer Science",
-                        "institution": "University of Dhaka",
-                        "year": "2020"
-                    }
-                ],
-                "projects": [
-                    {
-                        "name": "E-commerce Backend",
-                        "description": "Scalable microservices architecture",
-                        "tech": ["Python", "Docker", "Redis"]
-                    }
-                ],
-                "linkedin_url": "https://linkedin.com/in/johndev",
-                "github_url": "https://github.com/johndev"
-            },
-            {
-                "email": "sarah.designer@gmail.com",
-                "password": "jobseeker123",
-                "full_name": "Sarah Designer",
-                "phone": "+880 1812-987654",
-                "location": "Chittagong, Bangladesh",
-                "professional_summary": "Creative UI/UX designer with a keen eye for detail and user-centered design.",
-                "skills": ["UI/UX Design", "Figma", "Adobe XD", "Prototyping", "User Research"],
-                "primary_industry": "Design",
-                "inferred_industries": ["Design", "User Experience", "Digital Media"],
-                "experience": [
-                    {
-                        "title": "UI/UX Designer",
-                        "company": "Design Studio",
-                        "duration": "2022 - Present",
-                        "description": "Led design for mobile and web applications"
-                    }
-                ],
-                "education": [
-                    {
-                        "degree": "B.A. in Graphic Design",
-                        "institution": "Chittagong University",
-                        "year": "2021"
-                    }
-                ],
-                "portfolio_url": "https://sarahdesign.portfolio.com",
-                "linkedin_url": "https://linkedin.com/in/sarahdesigner"
-            },
-            {
-                "email": "fresh.grad@gmail.com",
-                "password": "jobseeker123",
-                "full_name": "Fresh Graduate",
-                "phone": "+880 1912-456789",
-                "location": "Dhaka, Bangladesh",
-                "professional_summary": "Recent computer science graduate eager to start career in web development.",
-                "skills": ["JavaScript", "React", "Node.js", "HTML", "CSS", "Git"],
-                "primary_industry": "Software Development",
-                "inferred_industries": ["Software Development", "Web Development"],
-                "experience": [],
-                "education": [
-                    {
-                        "degree": "B.Sc. in Computer Science",
-                        "institution": "BRAC University",
-                        "year": "2025"
-                    }
-                ],
-                "projects": [
-                    {
-                        "name": "Personal Blog",
-                        "description": "Built with React and Node.js",
-                        "tech": ["React", "Node.js", "MongoDB"]
-                    }
-                ],
-                "github_url": "https://github.com/freshgrad"
-            }
-        ]
-        
-        for js_data in job_seekers_data:
-            user = User(
-                email=js_data["email"],
-                hashed_password=hash_password(js_data["password"]),
-                role=UserRole.JOB_SEEKER,
-                is_active=True,  # Make active for testing (skip CV requirement)
-                is_email_verified=True
-            )
-            db.add(user)
-            db.flush()
-            
-            # Create JobSeeker with all available fields
-            job_seeker = JobSeeker(
-                user_id=user.id,
-                full_name=js_data["full_name"],
-                phone=js_data.get("phone"),
-                location=js_data.get("location"),
-                professional_summary=js_data.get("professional_summary"),
-                skills=js_data.get("skills", []),
-                primary_industry=js_data.get("primary_industry"),
-                inferred_industries=js_data.get("inferred_industries", []),
-                experience=js_data.get("experience", []),
-                education=js_data.get("education", []),
-                projects=js_data.get("projects", []),
-                certifications=[],
-                awards=[],
-                languages=[],
-                publications=[],
-                volunteer_experience=[],
-                linkedin_url=js_data.get("linkedin_url"),
-                github_url=js_data.get("github_url"),
-                portfolio_url=js_data.get("portfolio_url"),
-                other_links=[],
-                profile_completed=True
-            )
-            db.add(job_seeker)
-            print(f"✅ Job Seeker: {js_data['email']} / jobseeker123")
-        
-        db.commit()
-        
-        # ===== CREATE TEST JOBS =====
-        print("\n💼 Creating test jobs...")
+        verified_employer = created_employers[0][2]  # TechCorp
         
         jobs_data = [
             {
-                "title": "Senior Backend Developer",
-                "description": "We need an experienced backend developer skilled in Python, FastAPI, and PostgreSQL. You'll be working on scalable microservices architecture.",
-                "salary_min": 80000,
-                "salary_max": 120000,
+                "title": "Senior Data Scientist",
+                "description": "We are seeking a seasoned Data Scientist to lead our AI initiatives. Must be proficient in Python, PyTorch, and classical machine learning algorithms. You will build predictive models and analyze large datasets.",
+                "salary_min": 100000,
+                "salary_max": 180000,
                 "location": "Dhaka",
                 "work_mode": WorkMode.HYBRID,
                 "job_type": JobType.FULL_TIME,
                 "experience_level": ExperienceLevel.SENIOR,
-                "required_skills": ["Python", "FastAPI", "PostgreSQL"],
-                "preferred_skills": ["Docker", "AWS"],
-                "is_fresh_graduate_friendly": False
+                "required_skills": ["Python", "Machine Learning", "PyTorch", "SQL", "Pandas"],
+                "preferred_skills": ["AWS", "Docker", "NLP"],
+                "is_fresh_graduate_friendly": False,
+                "hiring_policy": "Strict ATS threshold required.",
+                "ats_threshold": 70
             },
             {
                 "title": "Junior Frontend Developer",
-                "description": "Looking for a talented frontend developer to join our team. Fresh graduates welcome!",
+                "description": "Looking for a talented frontend developer to join our team. Fresh graduates welcome! Must know React.",
                 "salary_min": 40000,
                 "salary_max": 60000,
                 "location": "Dhaka",
                 "work_mode": WorkMode.REMOTE,
                 "job_type": JobType.FULL_TIME,
                 "experience_level": ExperienceLevel.ENTRY,
-                "required_skills": ["React", "JavaScript", "CSS"],
-                "preferred_skills": ["TypeScript", "Tailwind"],
-                "is_fresh_graduate_friendly": True
+                "required_skills": ["React", "JavaScript", "HTML", "CSS"],
+                "preferred_skills": ["TypeScript", "Tailwind CSS"],
+                "is_fresh_graduate_friendly": True,
+                "ats_threshold": 40
             },
             {
-                "title": "UI/UX Designer",
-                "description": "Creative designer needed for product design and user research.",
-                "salary_min": 50000,
-                "salary_max": 80000,
+                "title": "Product Manager",
+                "description": "Lead cross-functional teams to deliver impactful software products.",
+                "salary_min": 90000,
+                "salary_max": 150000,
                 "location": "Chittagong",
                 "work_mode": WorkMode.ONSITE,
                 "job_type": JobType.FULL_TIME,
                 "experience_level": ExperienceLevel.MID,
-                "required_skills": ["Figma", "Adobe XD", "UI Design"],
-                "preferred_skills": ["Prototyping", "User Research"],
-                "is_fresh_graduate_friendly": False
+                "required_skills": ["Product Management", "Agile", "Scrum", "Jira"],
+                "preferred_skills": ["UX Principles", "Data Analytics"],
+                "is_fresh_graduate_friendly": False,
+                "ats_threshold": 60
             },
             {
                 "title": "DevOps Engineer",
@@ -345,31 +189,17 @@ def seed_database():
                 "salary_min": 90000,
                 "salary_max": 140000,
                 "location": "Dhaka",
-                "work_mode": WorkMode.HYBRID,
+                "work_mode": WorkMode.REMOTE,
                 "job_type": JobType.FULL_TIME,
-                "experience_level": ExperienceLevel.SENIOR,
-                "required_skills": ["AWS", "Docker", "Kubernetes"],
-                "preferred_skills": ["Terraform", "Jenkins"],
-                "is_fresh_graduate_friendly": False
-            },
-            {
-                "title": "Marketing Intern",
-                "description": "3-month internship for digital marketing enthusiasts.",
-                "salary_min": 15000,
-                "salary_max": 20000,
-                "location": "Dhaka",
-                "work_mode": WorkMode.ONSITE,
-                "job_type": JobType.INTERNSHIP,
-                "experience_level": ExperienceLevel.ENTRY,
-                "required_skills": ["Social Media", "Content Writing"],
-                "preferred_skills": ["SEO", "Analytics"],
-                "is_fresh_graduate_friendly": True
+                "experience_level": ExperienceLevel.MID,
+                "required_skills": ["AWS", "Docker", "Kubernetes", "Linux", "CI/CD"],
+                "preferred_skills": ["Terraform", "Jenkins", "Python"],
+                "is_fresh_graduate_friendly": False,
+                "ats_threshold": 65
             }
         ]
         
-        # Only verified employer can post jobs
-        verified_employer = created_employers[0][2]  # TechCorp
-        
+        created_jobs = []
         for job_data in jobs_data:
             job = Job(
                 employer_id=verified_employer.id,
@@ -384,33 +214,138 @@ def seed_database():
                 required_skills=job_data["required_skills"],
                 preferred_skills=job_data["preferred_skills"],
                 is_fresh_graduate_friendly=job_data["is_fresh_graduate_friendly"],
+                hiring_policy=job_data.get("hiring_policy"),
+                ats_threshold=job_data.get("ats_threshold", 50),
                 is_active=True,
                 is_closed=False,
                 application_deadline=datetime.now(timezone.utc) + timedelta(days=30)
             )
             db.add(job)
-            print(f"✅ Job: {job_data['title']}")
+            db.flush()
+            created_jobs.append(job)
+        
+        target_job = created_jobs[0] # Senior Data Scientist is our highly applied-to job
+        db.commit()
+
+
+        # ===== CREATE MASSIVE NUMBER OF JOB SEEKERS FOR ATS TESTING =====
+        print(f"\n👤 Creating 25 diverse candidate applications for '{target_job.title}'...")
+        
+        # Skill templates to simulate various match scores
+        perfect_match_skills = ["Python", "Machine Learning", "PyTorch", "SQL", "Pandas", "AWS", "Docker", "NLP"]
+        good_match_skills = ["Python", "Machine Learning", "Scikit-Learn", "SQL", "TensorFlow"]
+        mediocre_match_skills = ["Python", "Django", "SQL", "Git", "HTML"]
+        bad_match_skills = ["Java", "Spring Boot", "Oracle Database", "Maven"]
+        frontend_skills = ["React", "JavaScript", "HTML", "CSS", "Figma", "Redux"]
+        
+        applicant_profiles = []
+        
+        # Generate 25 seekers
+        for i in range(1, 26):
+            # Assign random skills to simulate varied ATS scores
+            if i <= 5:
+                skills = perfect_match_skills
+                summary = "Senior Data Scientist with 5 years experience in building NLP and PyTorch models deployed via Docker on AWS. Strong Python and SQL skills."
+                exp_level = 5
+            elif i <= 10:
+                skills = good_match_skills
+                summary = "Data Scientist currently focusing on classical Machine Learning using Python, Pandas, and Scikit-Learn. Exploring deep learning."
+                exp_level = 3
+            elif i <= 15:
+                skills = frontend_skills
+                summary = "Frontend Developer passionate about UI UX. Expert in React and Javascript."
+                exp_level = 2
+            elif i <= 20:
+                skills = bad_match_skills
+                summary = "Enterprise Java developer focusing on Oracle and Spring Boot."
+                exp_level = 4
+            else:
+                skills = mediocre_match_skills
+                summary = "Backend Python Django developer looking to transition into data science. Knows SQL."
+                exp_level = 1
+
+            email = f"candidate{i}@test.com"
+            user = User(
+                email=email,
+                hashed_password=hash_password("jobseeker123"),
+                role=UserRole.JOB_SEEKER,
+                is_active=True,
+                is_email_verified=True
+            )
+            db.add(user)
+            db.flush()
+            
+            job_seeker = JobSeeker(
+                user_id=user.id,
+                full_name=f"Candidate {i}",
+                phone=f"+880 1712-0000{i:02d}",
+                location="Dhaka, Bangladesh",
+                professional_summary=summary,
+                skills=skills,
+                primary_industry="Technology",
+                profile_completed=True
+            )
+            db.add(job_seeker)
+            db.flush()
+            
+            # Create a mock parsed Resume
+            if Resume:
+                resume = Resume(
+                    job_seeker_id=job_seeker.id,
+                    file_url="https://res.cloudinary.com/demo/image/upload/sample.pdf",
+                    is_primary=True,
+                    parsed_data={
+                        "skills": skills,
+                        "experience": [{"title": "Software Engineer", "duration": f"{exp_level} years"}],
+                        "summary": summary
+                    }
+                )
+                db.add(resume)
+                db.flush()
+                
+                # Simulate scores based on group
+                if i <= 5:
+                    match_score = random.randint(85, 98)
+                elif i <= 10:
+                    match_score = random.randint(65, 84)
+                elif i <= 15:
+                    match_score = random.randint(40, 64)
+                elif i <= 20:
+                    match_score = random.randint(20, 39)
+                else:
+                    match_score = random.randint(5, 19)
+
+                # Apply to the Target Job
+                if Application:
+                    app = Application(
+                        job_id=target_job.id,
+                        job_seeker_id=job_seeker.id,
+                        resume_id=resume.id,
+                        cover_letter=f"Hi, I am very interested in this role. Here is my resume.",
+                        status=ApplicationStatus.PENDING,
+                        match_score=match_score,
+                        skills_match={
+                            "matched_required": skills[:2], 
+                            "matched_preferred": skills[2:4] if len(skills)>2 else [], 
+                            "missing_required": ["Missing Skill"]
+                        },
+                        current_round=0,
+                        ats_score=match_score, # For simplicity, setting ats_score to mirror match_score
+                        ats_report={"summary": "Mock ATS report", "score": match_score}
+                    )
+                    db.add(app)
         
         db.commit()
         
         print("\n" + "="*70)
-        print("✅ DATABASE SEEDED SUCCESSFULLY!")
+        print("✅ DATABASE SEEDED SUCCESSFULLY WITH ATS TEST DATA!")
         print("="*70)
-        print("\n📋 TEST ACCOUNTS CREATED:")
-        print("-"*70)
-        print("\n👑 ADMIN:")
-        print("   Email: admin@jobscape.com")
-        print("   Password: admin123")
-        print("\n🏢 EMPLOYERS (all use password: employer123):")
-        for email, company, emp in created_employers:
-            print(f"   - {email:30} | {company:25} | {emp.verification_tier}")
-        print("\n👤 JOB SEEKERS (all use password: jobseeker123):")
-        for js in job_seekers_data:
-            print(f"   - {js['email']:30} | {js['full_name']}")
-        print("\n💼 JOBS CREATED: 5 test jobs posted by TechCorp Ltd")
-        print("-"*70)
-        print("\n🚀 You can now start the backend and test:")
-        print("   uvicorn app.main:app --reload")
+        print("\n📋 HIGHLIGHTS:")
+        print(f"   - Created Job: '{target_job.title}'")
+        print(f"   - Attached **25 candidates** with varied skillsets (Perfect matches, Frontend Devs, Java devs, etc).")
+        print("   - You can now test Bulk ATS Scoring on this job as 'verified@techcorp.com'.")
+        print("\n👑 ADMIN: ayeshamashiat01@gmail.com / admin123")
+        print("🏢 EMPLOYER: verified@techcorp.com / employer123")
         print("="*70 + "\n")
         
     except Exception as e:
