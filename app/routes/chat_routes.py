@@ -70,7 +70,7 @@ class RoomResponse(BaseModel):
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def get_or_create_room(db: Session, application_id: UUID) -> ChatRoom:
+def get_or_create_room(db: Session, application_id: UUID, current_user: Optional[User] = None) -> ChatRoom:
     """Get existing chat room or create one for this application"""
     room = db.query(ChatRoom).filter(ChatRoom.application_id == application_id).first()
     if room:
@@ -81,10 +81,13 @@ def get_or_create_room(db: Session, application_id: UUID) -> ChatRoom:
         raise HTTPException(status_code=404, detail="Application not found")
 
     if application.status == ApplicationStatus.PENDING:
-        raise HTTPException(
-            status_code=403,
-            detail="Chat is only available after the employer has reviewed your application"
-        )
+        # If a job seeker is trying to chat before employer review, block them.
+        # But allow employers to initiate chat at any time.
+        if current_user and current_user.role != UserRole.EMPLOYER:
+            raise HTTPException(
+                status_code=403,
+                detail="Chat is only available after the employer has reviewed your application"
+            )
 
     from app.models.job import Job
 
@@ -110,7 +113,7 @@ def open_or_get_room(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    room = get_or_create_room(db, application_id)
+    room = get_or_create_room(db, application_id, current_user)
     _verify_room_access(db, room, current_user)
     return {"room_id": str(room.id), "is_active": room.is_active}
 
@@ -179,6 +182,25 @@ def get_my_rooms(
         ))
 
     return result
+
+
+@router.delete("/rooms/{room_id}")
+def delete_room(
+    room_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a chat room (only permitted for the users in the room)"""
+    room = db.query(ChatRoom).filter(ChatRoom.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    _verify_room_access(db, room, current_user)
+
+    db.delete(room)
+    db.commit()
+    
+    return {"status": "success", "message": "Chat deleted cleanly."}
 
 
 @router.get("/unread-total", response_model=dict)
@@ -427,7 +449,12 @@ def send_direct_message(
     # 1. Identify parties
     room = None
     if body.recipient_type == "employer":
-        employer = db.query(Employer).filter(Employer.id == body.recipient_id).first()
+        employer = db.query(Employer).filter(
+            or_(
+                Employer.id == body.recipient_id,
+                Employer.user_id == body.recipient_id
+            )
+        ).first()
         if not employer:
             raise HTTPException(404, "Employer not found")
         
@@ -457,7 +484,12 @@ def send_direct_message(
         sender_name = seeker.full_name
     
     else: # recipient_type == "job_seeker"
-        seeker = db.query(JobSeeker).filter(JobSeeker.id == body.recipient_id).first()
+        seeker = db.query(JobSeeker).filter(
+            or_(
+                JobSeeker.id == body.recipient_id,
+                JobSeeker.user_id == body.recipient_id
+            )
+        ).first()
         if not seeker:
             raise HTTPException(404, "Job seeker not found")
         
@@ -559,7 +591,7 @@ def bulk_message_applicants(
 
     sent_count = 0
     for app in applications:
-        room = get_or_create_room(db, app.id)
+        room = get_or_create_room(db, app.id, current_user)
         if not room.is_active:
             continue
 

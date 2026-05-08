@@ -184,6 +184,8 @@ def announce_selection(
     from datetime import datetime, timezone
     from app.models.notification import Notification, NotificationType
 
+    hired_seeker_ids = [app.job_seeker_id for app in hired_apps]
+
     for app in hired_apps:
         app.status = ApplicationStatus.HIRED
         
@@ -205,9 +207,40 @@ def announce_selection(
             )
             db.add(notif)
 
-    # 3. Mark job selection as announced
+    # 3. Mark all other candidates for this job as REJECTED
+    # We reject those who were SHORTLISTED or INTERVIEW_SCHEDULED (or SELECTED) but not HIRED
+    other_apps = db.query(Application).filter(
+        Application.job_id == job_id,
+        Application.status.in_([
+            ApplicationStatus.SHORTLISTED, 
+            ApplicationStatus.INTERVIEW_SCHEDULED,
+            ApplicationStatus.REVIEWED,
+            ApplicationStatus.PENDING,
+            ApplicationStatus.ACCEPTED
+        ]),
+        ~Application.id.in_(body.hired_application_ids)
+    ).all()
+
+    for alt_app in other_apps:
+        alt_app.status = ApplicationStatus.REJECTED
+        alt_app.rejection_reason = "Selection process completed. Position filled."
+        alt_app.rejected_at = datetime.now(timezone.utc)
+        
+        # Notify rejected candidates
+        notif = Notification(
+            user_id=alt_app.job_seeker.user_id,
+            title=f"Update on your application for {job.title}",
+            message=f"Thank you for your interest in the {job.title} position at {employer.company_name}. We have concluded our selection process and unfortunately, we will not be moving forward with your application at this time.",
+            type=NotificationType.SYSTEM,
+            link=f"/job-seeker/applications/{alt_app.id}"
+        )
+        db.add(notif)
+
+    # 4. Mark job selection as announced
     job.is_selection_announced = True
     job.selection_announcement_date = datetime.now(timezone.utc)
+    # Automatically close the job if it wasn't already
+    job.is_closed = True
     
     db.commit()
-    return {"message": f"Selection announced successfully. {len(hired_apps)} candidates marked as hired."}
+    return {"message": f"Selection announced successfully. {len(hired_apps)} candidates hired, {len(other_apps)} candidates notified of rejection."}

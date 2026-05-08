@@ -84,9 +84,17 @@ def get_my_applications(
     for app in applications:
         job = db.query(Job).filter(Job.id == app.job_id).first()
         employer = db.query(Employer).filter(Employer.id == job.employer_id).first()
+        
         app_dict = app.__dict__.copy()
         app_dict["job_title"] = job.title if job else None
         app_dict["company_name"] = employer.company_name if employer else None
+        
+        # Check interview completion status
+        schedule = db.query(InterviewSchedule).filter(
+            InterviewSchedule.application_id == app.id
+        ).first()
+        app_dict["interview_is_completed"] = schedule.is_completed if schedule else False
+        
         result.append(app_dict)
 
     return result
@@ -151,14 +159,14 @@ def get_all_employer_applications(
                     else:
                         meeting_link = f"/interview/{schedule.id}"
             
-            app_dict["booked_slot_id"] = str(schedule.id)
-            app_dict["booked_slot_datetime"] = schedule.confirmed_at
-            app_dict["booked_slot_duration_minutes"] = schedule.confirmed_duration_minutes
-            app_dict["booked_slot_location"] = schedule.location
-            app_dict["booked_slot_style"] = style_val
             app_dict["booked_slot_meeting_link"] = meeting_link
-        
-        elif app.booked_slot:
+            app_dict["interview_is_completed"] = schedule.is_completed
+            app_dict["interview_schedule_id"] = str(schedule.id)
+            
+        elif app.booked_slot_id:
+            # Fallback for slot pool without explicit Schedule record yet (though usually they co-exist)
+            app_dict["booked_slot_meeting_link"] = f"/interview/{app.booked_slot_id}"
+            app_dict["interview_is_completed"] = False
             app_dict["booked_slot_id"] = app.booked_slot_id
             app_dict["booked_slot_datetime"] = app.booked_slot_datetime
             app_dict["booked_slot_duration_minutes"] = app.booked_slot_duration_minutes
@@ -216,6 +224,7 @@ def get_job_applications(
 
     from app.models.job_seeker import JobSeeker
     from app.models.user import User as UserModel
+    from app.models.interview import InterviewSchedule, InterviewReview
 
     result = []
     for app in applications:
@@ -233,6 +242,26 @@ def get_job_applications(
             app_dict["booked_slot_location"] = app.booked_slot_location
             app_dict["booked_slot_style"] = app.booked_slot_style
             app_dict["booked_slot_meeting_link"] = app.booked_slot_meeting_link
+        
+        # Check if interview is completed and get review
+        schedule = db.query(InterviewSchedule).filter(InterviewSchedule.application_id == app.id).first()
+        app_dict["interview_is_completed"] = schedule.is_completed if schedule else False
+        app_dict["interview_schedule_id"] = schedule.id if schedule else None
+        
+        # Get review if exists
+        review = db.query(InterviewReview).filter(InterviewReview.application_id == app.id).first()
+        if review:
+            app_dict["interview_review"] = {
+                "notes": review.notes,
+                "rating": review.overall_rating,
+                "metrics": review.metrics
+            }
+        else:
+            app_dict["interview_review"] = None
+        
+        # Hiring info
+        app_dict["hired_at"] = job_seeker.hired_at if job_seeker else None
+        app_dict["current_employer_name"] = job_seeker.current_employer_name if job_seeker else None
         
         result.append(app_dict)
 
@@ -442,32 +471,47 @@ def get_application_details(
     else:
         raise HTTPException(status_code=403, detail="Unauthorized")
 
-    # Enrich with booked slot details for job seeker
+    # Enrich with confirmed interview details (InterviewSchedule) or booked slot (InterviewSlotPool)
     app_dict = {c.name: getattr(application, c.name) for c in application.__table__.columns}
 
-    # Try relationship first (booked_slot_id FK set), then fall back to reverse lookup
-    # (handles bookings that were made before booked_slot_id was properly saved)
-    slot = None
-    if application.booked_slot:
-        slot = application.booked_slot
-    else:
-        import app.models.interview as interview_models
-        # InterviewSlotPool has no application_id column — find via the applications collection
-        slot = db.query(interview_models.InterviewSlotPool).filter(
-            interview_models.InterviewSlotPool.applications.any(id=application.id)
-        ).first()
+    import app.models.interview as interview_models
+    
+    # 1. Try to find a confirmed interview schedule
+    schedule = db.query(interview_models.InterviewSchedule).filter(
+        interview_models.InterviewSchedule.application_id == application.id,
+        interview_models.InterviewSchedule.is_confirmed == True
+    ).first()
 
-    if slot:
-        app_dict["booked_slot_id"] = slot.id
-        app_dict["booked_slot_datetime"] = slot.datetime_utc
-        app_dict["booked_slot_duration_minutes"] = slot.duration_minutes
-        app_dict["booked_slot_location"] = slot.location
-        app_dict["booked_slot_style"] = slot.style
-        app_dict["booked_slot_meeting_link"] = getattr(slot, "meeting_link", None)
-        # Also repair the FK for future requests
-        if not application.booked_slot_id:
-            application.booked_slot_id = slot.id
-            db.commit()
+    if schedule:
+        app_dict["booked_slot_id"] = str(schedule.id)
+        app_dict["booked_slot_datetime"] = schedule.confirmed_at
+        app_dict["booked_slot_duration_minutes"] = schedule.confirmed_duration_minutes
+        app_dict["booked_slot_location"] = schedule.location
+        app_dict["booked_slot_style"] = schedule.style
+        app_dict["booked_slot_meeting_link"] = schedule.meeting_link
+        app_dict["interview_instructions"] = schedule.instructions
+    else:
+        # 2. Fall back to booked_slot relationship or reverse lookup in pool
+        slot = None
+        if application.booked_slot:
+            slot = application.booked_slot
+        else:
+            slot = db.query(interview_models.InterviewSlotPool).filter(
+                interview_models.InterviewSlotPool.applications.any(id=application.id)
+            ).first()
+
+        if slot:
+            app_dict["booked_slot_id"] = str(slot.id)
+            app_dict["booked_slot_datetime"] = slot.datetime_utc
+            app_dict["booked_slot_duration_minutes"] = slot.duration_minutes
+            app_dict["booked_slot_location"] = slot.location
+            app_dict["booked_slot_style"] = slot.style
+            app_dict["booked_slot_meeting_link"] = getattr(slot, "meeting_link", None)
+            
+            # Repair FK if missing
+            if not application.booked_slot_id:
+                application.booked_slot_id = slot.id
+                db.commit()
 
     return app_dict
 

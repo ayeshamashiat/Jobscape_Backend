@@ -106,7 +106,7 @@ class InterviewReview(Base):
     interview_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("interview_schedules.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=True
     )
     
     employer_id: Mapped[uuid.UUID] = mapped_column(

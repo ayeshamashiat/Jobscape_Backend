@@ -7,7 +7,7 @@ from typing import Optional, Text
 from datetime import datetime, timezone, timedelta
 from app.database import get_db
 from app.models.job_seeker import JobSeeker
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.schema.employer_schema import (
     EmployerRegistrationCreate,
     EmployerProfileUpdate,
@@ -1096,11 +1096,20 @@ def get_public_employer_profile(
     """
     from sqlalchemy import Text
     from app.models.job_seeker import JobSeeker
+    from app.schema.job_schema import JobResponse
     from app.schema.employer_schema import EmployerPublicBasic, EmployeeOnPlatform
 
-    employer = db.query(Employer).filter(Employer.id == employer_id).first()
+    employer = db.query(Employer).filter(
+        or_(
+            Employer.id == employer_id,
+            Employer.user_id == employer_id
+        )
+    ).first()
     if not employer:
         raise HTTPException(status_code=404, detail="Employer not found")
+
+    # Use the actual employer ID for subsequent queries
+    employer_id = employer.id
 
     # Populate verification badges
     employer.verification_badges = employer.get_verification_badges()
@@ -1147,9 +1156,9 @@ def get_public_employer_profile(
     response_rate = int((responded_apps / total_apps) * 100) if total_apps and total_apps > 0 else None
 
     return {
-        "employer": employer,
-        "active_jobs": jobs,
-        "employees_on_platform": company_employees,
+        "employer": EmployerPublicBasic.model_validate(employer),
+        "active_jobs": [JobResponse.model_validate(j) for j in jobs],
+        "employees_on_platform": [EmployeeOnPlatform.model_validate(e) for e in company_employees],
         "total_jobs_posted": employer.total_job_posts_count,
         "response_rate": response_rate,
     }

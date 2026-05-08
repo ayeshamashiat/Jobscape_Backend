@@ -78,6 +78,10 @@ def create_application(
     if not job_seeker:
         raise ValueError("Job seeker profile not found")
     
+    # Prevent a hired seeker from applying to the same job they currently hold
+    if job_seeker.is_employed and str(job_seeker.current_job_id) == str(job_id):
+        raise ValueError("You are already employed at this position")
+    
     # Calculate match score
     match_score, skills_match = calculate_match_score(job, job_seeker)
     

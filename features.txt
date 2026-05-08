@@ -1,0 +1,70 @@
+# Jobscape - Implemented Features Documentation
+
+Jobscape is a comprehensive job platform facilitating seamless interactions between Job Seekers and Employers. Below are the detailed features implemented in the system.
+
+## 1. User Authentication & Security
+*   **Dual-Role Registration**: Separate registration flows for Job Seekers (Basic) and Employers.
+*   **Email Verification**: Token-based email verification using SendGrid/SMTP. Mandatory for account activation.
+*   **Secure Login**: JWT-based authentication with role-specific payloads.
+*   **Password Management**: Secure password hashing (bcrypt) and token-based "Forgot Password" reset flow.
+*   **Rate Limiting**: Implementation of registration rate limiting to prevent spam and bot attacks.
+*   **Role-Based Access Control (RBAC)**: Strict separation of Seeker and Employer functionalities using FastAPI dependencies.
+
+## 2. Job Seeker Profile & Resume Management
+*   **AI-Powered CV Parsing**: Automated extraction of text from uploaded resumes (PDF/DOCX) using AI to auto-populate profile fields (Skills, Experience, Education, Contact info).
+*   **Cloudinary Integration**: Secure storage and retrieval of resume files.
+*   **Profile Completion Tracking**: System tracks if a user has completed their profile (mandatory for job applications).
+*   **Professional Profile**: Display of summary, skills, experience, projects, certifications, and social links (LinkedIn, GitHub, Portfolio).
+
+## 3. Job Management (Employer Side)
+*   **Job Lifecycle**: Create, update, delete, close, and reopen job listings.
+*   **Subscription & Limits**: Job posting limits based on subscription tiers (Free, Pro, Enterprise) and verification status.
+*   **Advanced Job Posting**: Define detailed requirements including salary ranges, work mode (Remote/On-site/Hybrid), job type, experience level, and industry.
+*   **Match Preview**: Employers can see a "Match Score" preview for candidates.
+
+## 4. Job Discovery & Application (Seeker Side)
+*   **Advanced Search & Filtering**: Multi-parameter search by keyword, skills, location, salary range, company size, and verification tier.
+*   **AI Match Scoring**: Real-time calculation of how well a seeker's profile matches a job description before they even apply.
+*   **Seamless Application**: Single-click application using the primary resume with optional cover letter support.
+*   **Application Tracking**: Dashboard to monitor real-time status (Pending, Shortlisted, Interviewing, Hired, Rejected).
+*   **Application Withdrawal**: Option to withdraw applications before they are processed.
+
+## 5. Application Management & ATS (Employer Side)
+*   **Recruitment Dashboard**: Centralized view of all applications across all posted jobs.
+*   **ATS Scoring (AI-Powered)**: Automated scoring of resumes against job descriptions, providing a detailed report and recommendation.
+*   **Bulk Actions**:
+    *   **Bulk ATS Scoring**: Score all pending applications at once.
+    *   **Bulk Shortlisting**: Automatically shortlist or reject candidates based on a configurable ATS score threshold.
+*   **Candidate Ranking**: Rank applicants by ATS score or match score for faster screening.
+
+## 6. Interview System
+*   **Hybrid Scheduling**:
+    *   **Manual Scheduling**: Employer proposes multiple time slots; seeker picks one to confirm.
+    *   **FCFS Slot Pooling**: Employer creates a pool of available slots; shortlisted candidates book them on a First-Come, First-Served basis.
+*   **Interview Styles**: Support for Video Call, In-Person, Phone, and Other.
+*   **Integrated Video Room**: Internal video conferencing integration where room IDs are automatically generated for confirmed interviews.
+*   **Real-time Notifications**: Automated email and in-app notifications for invitations, confirmations, and "Interview Started" events.
+
+## 7. Assessment & Evaluation
+*   **Custom Assessments**: Employers can create job-specific quizzes/assessments (MCQ, True/False) that candidates must take after being shortlisted.
+*   **Auto-Grading Logic**: System automatically grades assessments and records scores.
+*   **Interview Reviews**: Structured evaluation forms for employers to rate candidates (1-5 stars) and add private metrics/notes after interviews.
+
+## 8. Selection & Hiring
+*   **Selection Process Builder**: Define custom recruitment rounds (e.g., Initial Screening, Technical Round, Final HR).
+*   **Status Advancements**: Move candidates through defined rounds with automated notifications.
+*   **Hiring Announcement**: Final selection flow to hire specific candidates, which automatically notifies and updates their profiles to "Employed," while gracefully rejecting other candidates.
+
+## 9. Communication & Real-time Updates
+*   **In-App Chat**: 
+    *   Application-linked rooms for context-aware messaging.
+    *   Direct Messaging for general inquiries.
+    *   File Attachments in chat (Images, PDFs).
+    *   Unread message tracking and total counts.
+*   **Broadcast Messaging**: Bulk messaging capability to reach all candidates in a specific recruitment stage (e.g., notify all shortlisted candidates about a delay).
+*   **Notification System**: Real-time alerts for all critical actions (New Application, Shortlist, Message, Interview Invite).
+
+## 10. Miscellaneous Features
+*   **Email Templates**: Rich HTML email notifications for premium user experience.
+*   **Commute Integration**: Functionality to manage and display commute-related information (preliminary implementation).
+*   **Admin Dashboard Features**: Backend routes for platform-wide management.

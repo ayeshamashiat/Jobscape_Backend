@@ -186,6 +186,41 @@ def send_round_advancement_email(seeker_email: str, seeker_name: str, job_title:
     send_email(seeker_email, subject, html_body, text_body)
 
 
+def send_final_selection_email(seeker_email: str, seeker_name: str, job_title: str, company_name: str):
+    """Notify candidate they've been selected for the position."""
+    subject = f"Congratulations! You've been selected for {job_title} at {company_name}"
+    
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <h1 style="color: #059669;">Congratulations!</h1>
+                </div>
+                <p>Hi {seeker_name},</p>
+                <p>We are absolutely thrilled to inform you that you have been selected for the position of <strong>{job_title}</strong> at <strong>{company_name}</strong>!</p>
+                
+                <p>Our team was very impressed with your skills and the experience you shared during your interviews. We believe you will be a fantastic addition to our team.</p>
+                
+                <p>The hiring team will be in touch with you shortly to discuss the next steps, including the official offer and joining formalities.</p>
+                
+                <p>In the meantime, feel free to reach out to us if you have any questions.</p>
+                
+                <p>We look forward to having you on board!</p>
+                
+                <p>Best regards,</p>
+                <p>The {company_name} Hiring Team</p>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                <p style="font-size: 12px; color: #666;">This is an automated notification from Jobscape on behalf of {company_name}.</p>
+            </div>
+        </body>
+    </html>
+    """
+    text_body = f"Hi {seeker_name},\n\nCongratulations! You've been selected for the position of {job_title} at {company_name}!\n\nOur team was very impressed with your skills and experience. The hiring team will be in touch shortly to discuss the next steps.\n\nWe look forward to having you on board!\n\nBest regards,\nThe {company_name} Hiring Team"
+    
+    send_email(seeker_email, subject, html_body, text_body)
+
+
 def send_rejection_email(seeker_email: str, seeker_name: str, job_title: str, company_name: str):
     """Send an empathetic rejection email."""
     subject = f"Update on your application for {job_title} at {company_name}"

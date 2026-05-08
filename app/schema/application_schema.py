@@ -62,6 +62,10 @@ class ApplicationResponse(BaseModel):
     
     # Unified interview schedule ID
     interview_schedule_id: Optional[UUID] = None
+    interview_is_completed: bool = False
+    interview_review: Optional[dict] = None  # { "notes": "...", "rating": 5 }
+    hired_at: Optional[datetime] = None
+    current_employer_name: Optional[str] = None
     
     model_config = {"from_attributes": True}
 

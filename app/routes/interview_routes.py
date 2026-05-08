@@ -979,7 +979,7 @@ def book_interview_slot(
     # We use slot.id as the room identifier so all participants in this slot join the same room
     final_meeting_link = slot.meeting_link
     if final_style == InterviewStyle.VIDEO_CALL:
-        if not final_meeting_link or final_meeting_link.lower() in ["tbd", "zoom", "meet", "none"]:
+        if not final_meeting_link or final_meeting_link.lower() in ["tbd", "zoom", "meet", "none", "link"]:
             final_meeting_link = f"/interview/{slot.id}"
 
     schedule = InterviewSchedule(

@@ -64,6 +64,9 @@ class JobSeekerProfileResponse(BaseModel):
     portfolio_url: Optional[str]
     other_links: List[str]
     profile_completed: bool
+    is_employed: bool = False
+    current_job_id: Optional[UUID] = None
+    current_employer_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     
